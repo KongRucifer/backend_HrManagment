@@ -1,0 +1,35 @@
+{
+  "errors": {
+    "invalid_credentials": "Invalid email or password",
+    "invalid_token": "Session expired, please sign in again",
+    "account_disabled": "This account has been disabled",
+    "wifi_required": "Please connect to the office WiFi before checking in/out",
+    "wifi_invalid": "This WiFi is not recognized. You must be at the office to check in/out",
+    "already_checked_in": "You have already checked in today",
+    "not_checked_in": "You have not checked in yet today",
+    "already_checked_out": "You have already checked out today",
+    "employee_not_found": "Employee not found",
+    "department_not_found": "Department not found",
+    "position_not_found": "Position not found",
+    "schedule_not_found": "Work schedule not found",
+    "wifi_not_found": "WiFi network not found",
+    "user_not_found": "User not found",
+    "username_taken": "This username is already taken",
+    "email_taken": "This email is already registered",
+    "login_email_required": "A login email is required to create an account",
+    "wrong_password": "Current password is incorrect",
+    "invalid_token": "Session expired, please sign in again",
+    "not_found": "Not found",
+    "no_leave_chain": "No leave approval chain configured yet",
+    "already_decided": "This request has already been decided",
+    "not_your_turn": "It is not your turn to approve this request",
+    "invalid_approver": "The selected approver is not allowed"
+  },
+  "messages": {
+    "check_in_success": "Check-in successful",
+    "check_out_success": "Check-out successful",
+    "created": "Created successfully",
+    "updated": "Updated successfully",
+    "deleted": "Deleted successfully"
+  }
+}

@@ -1,0 +1,291 @@
+// HR_App - Prisma schema
+// Multi-schema: "auth" (login) and "public" (business data).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["auth", "public"]
+}
+
+// ---------------- Enums ----------------
+
+enum Role {
+  admin
+  employee
+
+  @@schema("auth")
+}
+
+enum EmployeeStatus {
+  active
+  inactive
+
+  @@schema("public")
+}
+
+enum RequestStatus {
+  pending
+  approved
+  rejected
+  cancelled
+
+  @@schema("public")
+}
+
+enum AttendanceStatus {
+  present
+  late
+  absent
+  leave
+
+  @@schema("public")
+}
+
+// ---------------- auth schema ----------------
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  username     String?   @unique
+  passwordHash String    @map("password_hash")
+  role         Role      @default(employee)
+  // Links to public.employees.id (kept as a plain scalar, no cross-schema FK).
+  employeeId   String?   @map("employee_id") @db.Uuid
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLogin    DateTime? @map("last_login") @db.Timestamptz(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("users")
+  @@schema("auth")
+}
+
+// ---------------- public schema ----------------
+
+model Department {
+  id        String     @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  employees Employee[]
+  positions Position[]
+
+  @@map("departments")
+  @@schema("public")
+}
+
+model Position {
+  id           String     @id @default(uuid()) @db.Uuid
+  name         String
+  departmentId String     @map("department_id") @db.Uuid
+  department   Department  @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  employees    Employee[]
+
+  @@map("positions")
+  @@schema("public")
+}
+
+model WorkSchedule {
+  id               String     @id @default(uuid()) @db.Uuid
+  name             String
+  startTime        String     @map("start_time") // "HH:mm:ss"
+  endTime          String     @map("end_time")
+  lateAfterMinutes Int        @default(0) @map("late_after_minutes")
+  isActive         Boolean    @default(true) @map("is_active")
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  employees        Employee[]
+
+  @@map("work_schedules")
+  @@schema("public")
+}
+
+model Employee {
+  id             String         @id @default(uuid()) @db.Uuid
+  employeeCode   String         @unique @map("employee_code")
+  firstName      String         @map("first_name")
+  lastName       String         @map("last_name")
+  email          String?
+  phone          String?
+  departmentId   String?        @map("department_id") @db.Uuid
+  department     Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  position       String?
+  positionId     String?        @map("position_id") @db.Uuid
+  positionRef    Position?      @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  birthDate      DateTime?      @map("birth_date") @db.Date
+  hireDate       DateTime?      @map("hire_date") @db.Date
+  status         EmployeeStatus @default(active)
+  workScheduleId String?        @map("work_schedule_id") @db.Uuid
+  workSchedule   WorkSchedule?  @relation(fields: [workScheduleId], references: [id], onDelete: SetNull)
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  attendances    Attendance[]
+  leaveRequests  LeaveRequest[]
+  sickRequests   SickRequest[]
+
+  @@map("employees")
+  @@schema("public")
+}
+
+model WifiNetwork {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  ssid      String
+  bssid     String   @unique
+  wifiCode  String?  @map("wifi_code")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  checkInAttendances  Attendance[] @relation("CheckInWifi")
+  checkOutAttendances Attendance[] @relation("CheckOutWifi")
+
+  @@map("wifi_networks")
+  @@schema("public")
+}
+
+model Attendance {
+  id               String           @id @default(uuid()) @db.Uuid
+  employeeId       String           @map("employee_id") @db.Uuid
+  employee         Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workDate         DateTime         @map("work_date") @db.Date
+  checkInTime      DateTime?        @map("check_in_time") @db.Timestamptz(6)
+  checkOutTime     DateTime?        @map("check_out_time") @db.Timestamptz(6)
+  checkInLocation  String?          @map("check_in_location")
+  checkOutLocation String?          @map("check_out_location")
+  checkInWifiId    String?          @map("check_in_wifi_id") @db.Uuid
+  checkInWifi      WifiNetwork?     @relation("CheckInWifi", fields: [checkInWifiId], references: [id], onDelete: SetNull)
+  checkOutWifiId   String?          @map("check_out_wifi_id") @db.Uuid
+  checkOutWifi     WifiNetwork?     @relation("CheckOutWifi", fields: [checkOutWifiId], references: [id], onDelete: SetNull)
+  status           AttendanceStatus @default(present)
+  workHours        Float?           @map("work_hours")
+  note             String?
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, workDate])
+  @@map("attendances")
+  @@schema("public")
+}
+
+// ---------------- Leave / Sick approval workflow ----------------
+
+/// Global ordered approval chain for LEAVE requests (step 1, 2, 3, ...).
+/// approverUserId links to auth.users.id (kept as a scalar, cross-schema).
+model LeaveApprover {
+  id             String   @id @default(uuid()) @db.Uuid
+  approverUserId String   @map("approver_user_id") @db.Uuid
+  stepOrder      Int      @unique @map("step_order")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("leave_approvers")
+  @@schema("public")
+}
+
+/// Types of sick / illness leave (admin-managed): pain, fever, accident, ...
+model SickType {
+  id           String        @id @default(uuid()) @db.Uuid
+  name         String
+  isActive     Boolean       @default(true) @map("is_active")
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  sickRequests SickRequest[]
+
+  @@map("sick_types")
+  @@schema("public")
+}
+
+/// Pool of users who MAY approve sick requests (requester picks one).
+model SickApprover {
+  id             String   @id @default(uuid()) @db.Uuid
+  approverUserId String   @unique @map("approver_user_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("sick_approvers")
+  @@schema("public")
+}
+
+/// A leave request submitted by an employee (sequential approval).
+model LeaveRequest {
+  id          String             @id @default(uuid()) @db.Uuid
+  employeeId  String             @map("employee_id") @db.Uuid
+  employee    Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reason      String
+  startDate   DateTime           @map("start_date") @db.Date
+  endDate     DateTime           @map("end_date") @db.Date
+  status      RequestStatus      @default(pending)
+  currentStep Int                @default(1) @map("current_step")
+  steps       LeaveRequestStep[]
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("leave_requests")
+  @@schema("public")
+}
+
+/// Snapshot of the approval chain at submission time (per request).
+model LeaveRequestStep {
+  id             String        @id @default(uuid()) @db.Uuid
+  leaveRequestId String        @map("leave_request_id") @db.Uuid
+  leaveRequest   LeaveRequest  @relation(fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  approverUserId String        @map("approver_user_id") @db.Uuid
+  stepOrder      Int           @map("step_order")
+  status         RequestStatus @default(pending)
+  comment        String?
+  decidedAt      DateTime?     @map("decided_at") @db.Timestamptz(6)
+
+  @@map("leave_request_steps")
+  @@schema("public")
+}
+
+/// A sick request submitted by an employee (single chosen approver).
+model SickRequest {
+  id             String        @id @default(uuid()) @db.Uuid
+  employeeId     String        @map("employee_id") @db.Uuid
+  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  sickTypeId     String        @map("sick_type_id") @db.Uuid
+  sickType       SickType      @relation(fields: [sickTypeId], references: [id], onDelete: Restrict)
+  approverUserId String        @map("approver_user_id") @db.Uuid
+  reason         String
+  status         RequestStatus @default(pending)
+  comment        String?
+  decidedAt      DateTime?     @map("decided_at") @db.Timestamptz(6)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("sick_requests")
+  @@schema("public")
+}
+
+/// In-app notification (also mirrored to Firebase push when configured).
+model Notification {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  type      String
+  title     String
+  body      String
+  refId     String?  @map("ref_id") @db.Uuid
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+  @@schema("public")
+}
+
+/// FCM device tokens for push notifications (one user may have several).
+model DeviceToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  token     String   @unique
+  platform  String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("device_tokens")
+  @@schema("public")
+}

@@ -1,0 +1,81 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { WorkSchedule } from '@prisma/client';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { CreateScheduleDto } from './dto/create-schedule.dto';
+import { UpdateScheduleDto } from './dto/update-schedule.dto';
+
+/** Normalizes "HH:mm" to "HH:mm:ss" so times store consistently. */
+const normalizeTime = (t?: string) =>
+  t === undefined ? undefined : t.length === 5 ? `${t}:00` : t;
+
+@Injectable()
+export class ScheduleService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  /** Creating a schedule makes it the active one; all others become inactive. */
+  async create(dto: CreateScheduleDto): Promise<WorkSchedule> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.workSchedule.updateMany({ data: { isActive: false } });
+      return tx.workSchedule.create({
+        data: {
+          name: dto.name,
+          startTime: normalizeTime(dto.startTime)!,
+          endTime: normalizeTime(dto.endTime)!,
+          lateAfterMinutes: dto.lateAfterMinutes,
+          isActive: true,
+        },
+      });
+    });
+  }
+
+  findAll(): Promise<WorkSchedule[]> {
+    return this.prisma.workSchedule.findMany({
+      orderBy: [{ isActive: 'desc' }, { startTime: 'asc' }],
+    });
+  }
+
+  /** The current active schedule (or null if none). */
+  getActive(): Promise<WorkSchedule | null> {
+    return this.prisma.workSchedule.findFirst({ where: { isActive: true } });
+  }
+
+  /** Makes one schedule active and deactivates the rest. */
+  async activate(id: string): Promise<WorkSchedule> {
+    await this.findOne(id);
+    return this.prisma.$transaction(async (tx) => {
+      await tx.workSchedule.updateMany({ data: { isActive: false } });
+      return tx.workSchedule.update({
+        where: { id },
+        data: { isActive: true },
+      });
+    });
+  }
+
+  async findOne(id: string): Promise<WorkSchedule> {
+    const schedule = await this.prisma.workSchedule.findUnique({
+      where: { id },
+    });
+    if (!schedule) {
+      throw new NotFoundException('common.errors.schedule_not_found');
+    }
+    return schedule;
+  }
+
+  async update(id: string, dto: UpdateScheduleDto): Promise<WorkSchedule> {
+    await this.findOne(id);
+    return this.prisma.workSchedule.update({
+      where: { id },
+      data: {
+        name: dto.name,
+        startTime: normalizeTime(dto.startTime),
+        endTime: normalizeTime(dto.endTime),
+        lateAfterMinutes: dto.lateAfterMinutes,
+      },
+    });
+  }
+
+  async remove(id: string): Promise<void> {
+    await this.findOne(id);
+    await this.prisma.workSchedule.delete({ where: { id } });
+  }
+}
