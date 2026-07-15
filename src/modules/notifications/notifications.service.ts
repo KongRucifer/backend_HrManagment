@@ -1,12 +1,17 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import { PaginatedResult } from '../../shared/dto/pagination.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FcmService } from './fcm.service';
+import { NotificationsGateway } from './notifications.gateway';
+import { QueryNotificationDto } from './dto/query-notification.dto';
 
 @Injectable()
 export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly fcm: FcmService,
+    private readonly gateway: NotificationsGateway,
   ) {}
 
   /** Creates an in-app notification and (if configured) sends a push. */
@@ -23,6 +28,16 @@ export class NotificationsService {
         refId: input.refId ?? null,
       },
     });
+
+    // Before the FCM round-trip: an app that is open should light its badge up
+    // immediately rather than wait on Google's servers.
+    await this.gateway.pushNotification(userId, {
+      type: input.type,
+      title: input.title,
+      body: input.body,
+      refId: input.refId ?? null,
+    });
+
     const tokens = await this.prisma.deviceToken.findMany({
       where: { userId },
       select: { token: true },
@@ -41,12 +56,34 @@ export class NotificationsService {
     }
   }
 
-  list(userId: string) {
-    return this.prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+  /**
+   * Paged list, newest first, optionally narrowed to read / unread.
+   * The @@index([userId, isRead]) on the model covers both shapes.
+   */
+  async list(
+    userId: string,
+    query: QueryNotificationDto,
+  ): Promise<PaginatedResult<Prisma.NotificationGetPayload<object>>> {
+    const where: Prisma.NotificationWhereInput = { userId };
+    if (query.isRead !== undefined) where.isRead = query.isRead;
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.notification.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: query.skip,
+        take: query.limit,
+      }),
+      this.prisma.notification.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page: query.page,
+      limit: query.limit,
+      totalPages: Math.ceil(total / query.limit),
+    };
   }
 
   unreadCount(userId: string) {
@@ -58,6 +95,8 @@ export class NotificationsService {
       where: { id, userId },
       data: { isRead: true },
     });
+    // Reading on the phone should drop the badge on the user's other devices too.
+    await this.gateway.emitUnread(userId);
     return { success: true };
   }
 
@@ -66,6 +105,7 @@ export class NotificationsService {
       where: { userId, isRead: false },
       data: { isRead: true },
     });
+    await this.gateway.emitUnread(userId);
     return { success: true };
   }
 

@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 import {
@@ -6,6 +15,7 @@ import {
   CurrentUser,
 } from '../../shared/decorators/current-user.decorator';
 import { NotificationsService } from './notifications.service';
+import { QueryNotificationDto } from './dto/query-notification.dto';
 
 class RegisterTokenDto {
   @IsString()
@@ -23,8 +33,8 @@ export class NotificationsController {
   constructor(private readonly service: NotificationsService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser) {
-    return this.service.list(user.userId);
+  list(@CurrentUser() user: AuthUser, @Query() query: QueryNotificationDto) {
+    return this.service.list(user.userId, query);
   }
 
   @Get('unread-count')

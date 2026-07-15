@@ -84,12 +84,25 @@ export class ConfigService {
     });
   }
 
-  createLeaveType(name: string) {
-    return this.prisma.leaveType.create({ data: { name } });
+  createLeaveType(name: string, laoName?: string | null) {
+    return this.prisma.leaveType.create({
+      data: { name, laoName: laoName || null },
+    });
   }
 
-  updateLeaveType(id: string, data: { name?: string; isActive?: boolean }) {
-    return this.prisma.leaveType.update({ where: { id }, data });
+  updateLeaveType(
+    id: string,
+    data: { name?: string; laoName?: string | null; isActive?: boolean },
+  ) {
+    return this.prisma.leaveType.update({
+      where: { id },
+      // An empty box means "no Lao name", not "leave unchanged" — store null so
+      // the display falls back to the English name.
+      data: {
+        ...data,
+        ...(data.laoName !== undefined && { laoName: data.laoName || null }),
+      },
+    });
   }
 
   async deleteLeaveType(id: string) {
@@ -110,12 +123,23 @@ export class ConfigService {
     });
   }
 
-  createEmergencyType(name: string) {
-    return this.prisma.emergencyType.create({ data: { name } });
+  createEmergencyType(name: string, laoName?: string | null) {
+    return this.prisma.emergencyType.create({
+      data: { name, laoName: laoName || null },
+    });
   }
 
-  updateEmergencyType(id: string, data: { name?: string; isActive?: boolean }) {
-    return this.prisma.emergencyType.update({ where: { id }, data });
+  updateEmergencyType(
+    id: string,
+    data: { name?: string; laoName?: string | null; isActive?: boolean },
+  ) {
+    return this.prisma.emergencyType.update({
+      where: { id },
+      data: {
+        ...data,
+        ...(data.laoName !== undefined && { laoName: data.laoName || null }),
+      },
+    });
   }
 
   async deleteEmergencyType(id: string) {

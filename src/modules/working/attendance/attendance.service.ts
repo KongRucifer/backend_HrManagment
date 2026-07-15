@@ -21,6 +21,7 @@ import {
   getWorkDate,
   monthRange,
   timeOnDateToInstant,
+  timeToMinutes,
   toDateOnly,
 } from '../../../shared/utils/datetime.util';
 import { PrismaService } from '../../../prisma/prisma.service';
@@ -58,11 +59,16 @@ export class AttendanceService {
     // 1) WiFi gate — server-side verification.
     const wifi = await this.wifiService.verifyOrThrow(dto.ssid, dto.bssid);
 
-    // 2) One record per employee per day.
+    // 2) One record per employee per day. A row may already exist because an
+    //    approved leave/emergency was materialized onto this day — that is NOT
+    //    a duplicate check-in, so only a real checkInTime blocks.
     const workDateStr = getWorkDate();
     const workDate = toDateOnly(workDateStr);
     const existing = await this.prisma.attendance.findUnique({
       where: { employeeId_workDate: { employeeId, workDate } },
+      include: {
+        emergencyRequest: { select: { startTime: true, endTime: true } },
+      },
     });
     if (existing && existing.checkInTime) {
       throw new ConflictException('common.errors.already_checked_in');
@@ -70,8 +76,22 @@ export class AttendanceService {
 
     const now = new Date();
     const employee = await this.employeesService.findOne(employeeId);
-    const status = this.resolveStatus(now, workDateStr, employee.workSchedule);
+    // An approved morning emergency pushes back the on-time deadline.
+    const expectedStart = this.expectedStartFor(
+      employee.workSchedule,
+      existing?.emergencyRequest ?? null,
+    );
+    const status = this.resolveStatus(
+      now,
+      workDateStr,
+      employee.workSchedule,
+      expectedStart,
+    );
 
+    // The upsert is keyed on (employeeId, workDate), so a leave/emergency day
+    // is UPDATED in place — never duplicated. leaveRequestId/emergencyRequestId
+    // are deliberately left untouched: the day stays linked to its request even
+    // though the person turned up, and the badge keeps showing.
     return this.prisma.attendance.upsert({
       where: { employeeId_workDate: { employeeId, workDate } },
       create: {
@@ -99,7 +119,8 @@ export class AttendanceService {
 
     const wifi = await this.wifiService.verifyOrThrow(dto.ssid, dto.bssid);
 
-    const workDate = toDateOnly(getWorkDate());
+    const workDateStr = getWorkDate();
+    const workDate = toDateOnly(workDateStr);
     const record = await this.prisma.attendance.findUnique({
       where: { employeeId_workDate: { employeeId, workDate } },
     });
@@ -111,6 +132,16 @@ export class AttendanceService {
     }
 
     const now = new Date();
+    // Leaving before the schedule's end is recorded on every day that has a
+    // check-out — including leave/emergency days, where the person came in
+    // anyway. Kept separate from `status` so "late AND left early" is not lost.
+    const employee = await this.employeesService.findOne(employeeId);
+    const schedule = employee.workSchedule;
+    const leftEarly = schedule
+      ? now.getTime() <
+        timeOnDateToInstant(workDateStr, schedule.endTime).getTime()
+      : false;
+
     return this.prisma.attendance.update({
       where: { id: record.id },
       data: {
@@ -118,6 +149,7 @@ export class AttendanceService {
         checkOutWifiId: wifi.id,
         checkOutLocation: dto.location ?? null,
         workHours: diffHours(record.checkInTime, now),
+        leftEarly,
       },
     });
   }
@@ -154,6 +186,7 @@ export class AttendanceService {
     // Filter by FK, not status: a partial-day emergency keeps status=on_time.
     if (query.kind === 'leave') where.leaveRequestId = { not: null };
     if (query.kind === 'emergency') where.emergencyRequestId = { not: null };
+    if (query.leftEarly !== undefined) where.leftEarly = query.leftEarly;
     if (query.search) {
       // Filter across the related employee's name / code.
       where.employee = {
@@ -218,6 +251,7 @@ export class AttendanceService {
         leaveRequestId: true,
         emergencyRequestId: true,
         checkInTime: true,
+        leftEarly: true,
       },
     });
 
@@ -232,6 +266,7 @@ export class AttendanceService {
       absentDays: count((r) => r.status === AttendanceStatus.absent),
       leaveDays: count((r) => r.leaveRequestId !== null),
       emergencyDays: count((r) => r.emergencyRequestId !== null),
+      leftEarlyDays: count((r) => r.leftEarly),
       workedDays: count((r) => r.checkInTime !== null),
       totalDays: rows.length,
     };
@@ -333,18 +368,50 @@ export class AttendanceService {
     return user.employeeId;
   }
 
+  /**
+   * on_time / late only — checking in at all means you are NOT absent, however
+   * late you are. (`absent` is written solely by the nightly job, for people
+   * who never came.)
+   *
+   * [expectedStart] overrides the schedule's start time: an approved emergency
+   * that covers the morning excuses the employee until its endTime, so a
+   * 09:00–13:30 emergency makes 13:30 (+ grace) the on-time deadline.
+   */
   private resolveStatus(
     now: Date,
     workDate: string,
     schedule: WorkSchedule | null,
+    expectedStart?: string | null,
   ): AttendanceStatus {
     if (!schedule) {
       return AttendanceStatus.on_time;
     }
-    const threshold = timeOnDateToInstant(workDate, schedule.startTime);
+    const start = expectedStart ?? schedule.startTime;
+    const threshold = timeOnDateToInstant(workDate, start);
     const graceMs = (schedule.lateAfterMinutes ?? 0) * 60_000;
     return now.getTime() > threshold.getTime() + graceMs
       ? AttendanceStatus.late
       : AttendanceStatus.on_time;
+  }
+
+  /**
+   * The time the employee is due in on this day.
+   *
+   * Normally the schedule's start. But an APPROVED emergency whose window
+   * covers that start (e.g. 09:00–13:30 against a 09:00 schedule) excuses the
+   * morning, so they are due back when it ends. An afternoon emergency
+   * (14:00–16:00) does not move the morning deadline.
+   *
+   * Whole-day emergencies and leave carry no time window and so do not shift
+   * anything — the normal start applies if the person turns up anyway.
+   */
+  private expectedStartFor(
+    schedule: WorkSchedule | null,
+    emergency: { startTime: string | null; endTime: string | null } | null,
+  ): string | null {
+    if (!schedule || !emergency?.startTime || !emergency?.endTime) return null;
+    const coversStart =
+      timeToMinutes(emergency.startTime) <= timeToMinutes(schedule.startTime);
+    return coversStart ? emergency.endTime : null;
   }
 }

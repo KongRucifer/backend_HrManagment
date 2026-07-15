@@ -1,5 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -46,4 +48,18 @@ export class QueryAttendanceDto extends PaginationDto {
   @IsOptional()
   @IsIn(['leave', 'emergency'])
   kind?: 'leave' | 'emergency';
+
+  @ApiPropertyOptional({ description: 'Only days checked out before end_time' })
+  @IsOptional()
+  // Read the RAW value off `obj`: main.ts enables enableImplicitConversion,
+  // which would run Boolean('false') === true and silently invert this.
+  @Transform(({ obj }) => {
+    const raw = obj?.leftEarly;
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    if (raw === 'true' || raw === true) return true;
+    if (raw === 'false' || raw === false) return false;
+    return raw;
+  })
+  @IsBoolean()
+  leftEarly?: boolean;
 }

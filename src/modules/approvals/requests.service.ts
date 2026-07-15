@@ -16,6 +16,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { UsersService } from '../users/users.service';
 import { ApproverLookupService } from './approver-lookup.service';
+import { QueryMyRequestsDto } from './dto/query-my-requests.dto';
 
 @Injectable()
 export class RequestsService {
@@ -54,7 +55,9 @@ export class RequestsService {
         startDate: toDateOnly(dto.startDate),
         endDate: toDateOnly(dto.endDate),
         currentStep: 1,
-        // Snapshot the chain so later edits don't affect this request.
+        // Snapshot the chain so later edits don't affect this request. The
+        // requester's own steps are kept rather than dropped: settleLeave
+        // auto-approves them, which leaves an honest audit trail.
         steps: {
           create: chain.map((c) => ({
             approverUserId: c.approverUserId,
@@ -63,9 +66,94 @@ export class RequestsService {
         },
       },
     });
-    // Notify the first approver only.
-    await this.notifyApprover(chain[0].approverUserId, 'leave', request.id, employeeId);
-    return request;
+    // Walks to the first step someone else must decide, notifying them — or
+    // approves outright when the chain holds nobody but the requester.
+    await this.settleLeave(request.id);
+    return this.prisma.leaveRequest.findUnique({ where: { id: request.id } });
+  }
+
+  /**
+   * Moves a leave request forward from its current step.
+   *
+   * A step whose approver IS the requester is approved automatically: nobody
+   * reviews their own leave, and waiting on them would deadlock the chain (the
+   * request form hides them from the displayed chain for the same reason).
+   * Consecutive such steps are possible, so this loops instead of skipping one.
+   *
+   * Shared by createLeave and decideLeave so the rule cannot drift between
+   * "the chain starts on me" and "the chain reaches me later".
+   */
+  private async settleLeave(
+    requestId: string,
+  ): Promise<{ status: string; nextStep?: number }> {
+    const request = await this.prisma.leaveRequest.findUnique({
+      where: { id: requestId },
+      include: { steps: { orderBy: { stepOrder: 'asc' } } },
+    });
+    if (!request) throw new NotFoundException('common.errors.not_found');
+
+    const requesterUserId = await this.userIdOfEmployee(request.employeeId);
+    let current = request.currentStep;
+
+    for (;;) {
+      const step = request.steps.find((s) => s.stepOrder === current);
+      if (!step) break; // chain exhausted -> fully approved below
+
+      if (step.approverUserId !== requesterUserId) {
+        // A real reviewer: park here and hand it to them.
+        if (current !== request.currentStep) {
+          await this.prisma.leaveRequest.update({
+            where: { id: requestId },
+            data: { currentStep: current },
+          });
+        }
+        await this.notifyApprover(
+          step.approverUserId,
+          'leave',
+          requestId,
+          request.employeeId,
+        );
+        return { status: 'pending', nextStep: current };
+      }
+
+      await this.prisma.leaveRequestStep.update({
+        where: { id: step.id },
+        data: {
+          status: RequestStatus.approved,
+          auto: true,
+          decidedAt: new Date(),
+        },
+      });
+      current += 1;
+    }
+
+    // Every remaining step was the requester's own -> nothing left to decide.
+    // The transaction guarantees an approved request can never exist without
+    // its attendance days.
+    await this.prisma.$transaction(
+      async (tx) => {
+        await tx.leaveRequest.update({
+          where: { id: requestId },
+          data: {
+            status: RequestStatus.approved,
+            // Park on the last real step; currentStep is only meaningful while
+            // pending, and pointing past the chain would read as a bug.
+            currentStep: Math.max(1, current - 1),
+          },
+        });
+        await this.materialize(tx, {
+          employeeId: request.employeeId,
+          startDate: request.startDate,
+          endDate: request.endDate,
+          status: AttendanceStatus.leave,
+          fk: { leaveRequestId: requestId },
+        });
+      },
+      // A month-long leave is ~22 sequential upserts; the 5s default is tight.
+      { timeout: 15_000 },
+    );
+    await this.notifyRequester(request.employeeId, 'leave_approved', requestId);
+    return { status: 'approved' };
   }
 
   async decideLeave(
@@ -106,36 +194,13 @@ export class RequestsService {
       where: { id: step.id },
       data: { status: RequestStatus.approved, comment, decidedAt: new Date() },
     });
-    const next = request.steps.find((s) => s.stepOrder === request.currentStep + 1);
-    if (next) {
-      await this.prisma.leaveRequest.update({
-        where: { id: requestId },
-        data: { currentStep: request.currentStep + 1 },
-      });
-      await this.notifyApprover(next.approverUserId, 'leave', requestId, request.employeeId);
-      return { status: 'pending', nextStep: next.stepOrder };
-    }
-    // Last step approved -> fully approved. The transaction guarantees an
-    // approved request can never exist without its attendance days.
-    await this.prisma.$transaction(
-      async (tx) => {
-        await tx.leaveRequest.update({
-          where: { id: requestId },
-          data: { status: RequestStatus.approved },
-        });
-        await this.materialize(tx, {
-          employeeId: request.employeeId,
-          startDate: request.startDate,
-          endDate: request.endDate,
-          status: AttendanceStatus.leave,
-          fk: { leaveRequestId: requestId },
-        });
-      },
-      // A month-long leave is ~22 sequential upserts; the 5s default is tight.
-      { timeout: 15_000 },
-    );
-    await this.notifyRequester(request.employeeId, 'leave_approved', requestId);
-    return { status: 'approved' };
+    await this.prisma.leaveRequest.update({
+      where: { id: requestId },
+      data: { currentStep: request.currentStep + 1 },
+    });
+    // From here the next step may be the requester's own (auto-approved) or the
+    // chain may be finished — settleLeave owns both cases.
+    return this.settleLeave(requestId);
   }
 
   /** The requester's own leave requests, with step progress. */
@@ -146,6 +211,140 @@ export class RequestsService {
       orderBy: { createdAt: 'desc' },
     });
     return this.decorateLeave(rows);
+  }
+
+  /**
+   * The employee's own leave + emergency requests as ONE paged list.
+   *
+   * A merge of two tables can't be paginated by the DB, so: take (skip+limit)
+   * from each side (both already sorted desc), merge, sort, then slice the
+   * window. That is exact — the true page can only contain rows within the
+   * first (skip+limit) of either side — while keeping memory bounded, unlike
+   * loading every request the employee ever made.
+   */
+  async myRequests(employeeId: string, query: QueryMyRequestsDto) {
+    const where = query.status
+      ? { employeeId, status: query.status }
+      : { employeeId };
+    const window = query.skip + query.limit;
+
+    const [leaveRows, emgRows, leaveTotal, emgTotal] = await Promise.all([
+      this.prisma.leaveRequest.findMany({
+        where,
+        include: { steps: { orderBy: { stepOrder: 'asc' } }, leaveType: true },
+        orderBy: { createdAt: 'desc' },
+        take: window,
+      }),
+      this.prisma.emergencyRequest.findMany({
+        where,
+        include: { emergencyType: true },
+        orderBy: { createdAt: 'desc' },
+        take: window,
+      }),
+      this.prisma.leaveRequest.count({ where }),
+      this.prisma.emergencyRequest.count({ where }),
+    ]);
+
+    const [leave, emergency] = await Promise.all([
+      this.decorateLeave(leaveRows),
+      this.decorateEmergency(emgRows),
+    ]);
+    const merged = [...leave, ...emergency].sort(
+      (a: any, b: any) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    const total = leaveTotal + emgTotal;
+    return {
+      items: merged.slice(query.skip, query.skip + query.limit),
+      total,
+      page: query.page,
+      limit: query.limit,
+      totalPages: Math.ceil(total / query.limit),
+    };
+  }
+
+  /**
+   * One leave request by id — used to deep-link from a notification, where all
+   * the client has is `refId`. Readable by the requester or any of its
+   * approvers; `actionable` mirrors the inbox so the decision UI can reuse it.
+   */
+  async findLeaveById(userId: string, employeeId: string | null, id: string) {
+    const row = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: { steps: { orderBy: { stepOrder: 'asc' } }, leaveType: true },
+    });
+    if (!row) throw new NotFoundException('common.errors.not_found');
+
+    const myStep = row.steps.find((s) => s.approverUserId === userId);
+    const isRequester = employeeId !== null && employeeId === row.employeeId;
+    if (!isRequester && !myStep) {
+      throw new ForbiddenException('common.errors.not_your_turn');
+    }
+    const [decorated] = await this.decorateLeave([row]);
+    return {
+      ...decorated,
+      actionable:
+        row.status === RequestStatus.pending &&
+        myStep?.stepOrder === row.currentStep &&
+        myStep?.status === RequestStatus.pending,
+      myStepOrder: myStep?.stepOrder ?? null,
+    };
+  }
+
+  /** One emergency request by id (see findLeaveById). */
+  async findEmergencyById(
+    userId: string,
+    employeeId: string | null,
+    id: string,
+  ) {
+    const row = await this.prisma.emergencyRequest.findUnique({
+      where: { id },
+      include: { emergencyType: true },
+    });
+    if (!row) throw new NotFoundException('common.errors.not_found');
+
+    const isApprover = row.approverUserId === userId;
+    const isRequester = employeeId !== null && employeeId === row.employeeId;
+    if (!isRequester && !isApprover) {
+      throw new ForbiddenException('common.errors.not_your_turn');
+    }
+    const [decorated] = await this.decorateEmergency([row]);
+    return {
+      ...decorated,
+      actionable: isApprover && row.status === RequestStatus.pending,
+    };
+  }
+
+  /**
+   * Whether this user should see the approvals ("Manage Leave") area at all.
+   *
+   * Live chain/pool membership alone is NOT enough: each leave request
+   * snapshots the chain at creation, so someone removed from the chain today
+   * can still hold a pending step on an in-flight request. Hiding the area
+   * from them would strand that request with nobody able to decide it — hence
+   * the pending-work checks below.
+   */
+  async approverStatus(userId: string): Promise<{ isApprover: boolean }> {
+    const [inChain, inPool, pendingLeave, pendingEmergency] = await Promise.all([
+      this.prisma.leaveApprover.count({ where: { approverUserId: userId } }),
+      this.prisma.emergencyApprover.count({ where: { approverUserId: userId } }),
+      this.prisma.leaveRequest.count({
+        where: {
+          status: RequestStatus.pending,
+          steps: {
+            some: { approverUserId: userId, status: RequestStatus.pending },
+          },
+        },
+      }),
+      this.prisma.emergencyRequest.count({
+        where: { approverUserId: userId, status: RequestStatus.pending },
+      }),
+    ]);
+    return {
+      isApprover:
+        inChain > 0 || inPool > 0 || pendingLeave > 0 || pendingEmergency > 0,
+    };
   }
 
   /** Requests where this user is an approver (with an `actionable` flag). */
@@ -191,7 +390,12 @@ export class RequestsService {
       return {
         id: r.id,
         type: 'leave',
-        leaveType: r.leaveType?.name ?? null,
+        // Both names, resolved on the client: picking here from the request's
+        // x-lang header would freeze the label until a refetch, so switching
+        // language in the app would leave the old one on screen.
+        leaveType: r.leaveType
+          ? { name: r.leaveType.name, laoName: r.leaveType.laoName }
+          : null,
         reason: r.reason,
         startDate: r.startDate,
         endDate: r.endDate,
@@ -211,6 +415,9 @@ export class RequestsService {
           stepOrder: s.stepOrder,
           status: s.status,
           decidedAt: s.decidedAt,
+          // Lets the timeline say "approved automatically" instead of implying
+          // this person sat and reviewed their own request.
+          auto: s.auto,
           approver: approverInfo.get(s.approverUserId) ?? null,
         })),
       };
@@ -222,7 +429,8 @@ export class RequestsService {
     employeeId: string,
     dto: {
       emergencyTypeId: string;
-      approverUserId: string;
+      /** Absent only when the pool holds nobody but the requester. */
+      approverUserId?: string | null;
       reason: string;
       startDate: string;
       endDate: string;
@@ -265,10 +473,56 @@ export class RequestsService {
       }
     }
 
-    const inPool = await this.prisma.emergencyApprover.findUnique({
-      where: { approverUserId: dto.approverUserId },
-    });
-    if (!inPool) throw new BadRequestException('common.errors.invalid_approver');
+    // 5) Nobody approves their own emergency request, so the requester never
+    // counts as an available approver — the form hides them for the same reason.
+    const requesterUserId = await this.userIdOfEmployee(employeeId);
+    const pool = await this.prisma.emergencyApprover.findMany();
+    const others = pool.filter((p) => p.approverUserId !== requesterUserId);
+
+    if (!dto.approverUserId) {
+      // Only legitimate when the pool holds nobody but the requester: there is
+      // no one who could ever decide it, so it stands approved on creation.
+      if (others.length > 0) {
+        throw new BadRequestException('common.errors.invalid_approver');
+      }
+      const request = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.emergencyRequest.create({
+            data: {
+              employeeId,
+              emergencyTypeId: dto.emergencyTypeId,
+              // Self, so the row keeps an accurate "who owns this decision".
+              approverUserId: requesterUserId!,
+              reason: dto.reason,
+              startDate: start,
+              endDate: end,
+              startTime,
+              endTime,
+              status: RequestStatus.approved,
+              auto: true,
+              decidedAt: new Date(),
+            },
+          });
+          await this.materialize(tx, {
+            employeeId,
+            startDate: start,
+            endDate: end,
+            status: AttendanceStatus.emergency,
+            fk: { emergencyRequestId: created.id },
+          });
+          return created;
+        },
+        { timeout: 15_000 },
+      );
+      return request;
+    }
+
+    if (dto.approverUserId === requesterUserId) {
+      throw new BadRequestException('common.errors.invalid_approver');
+    }
+    if (!others.some((p) => p.approverUserId === dto.approverUserId)) {
+      throw new BadRequestException('common.errors.invalid_approver');
+    }
 
     const request = await this.prisma.emergencyRequest.create({
       data: {
@@ -385,7 +639,10 @@ export class RequestsService {
       return {
         id: r.id,
         type: 'emergency',
-        emergencyType: r.emergencyType?.name ?? null,
+        // Both names — see decorateLeave.
+        emergencyType: r.emergencyType
+          ? { name: r.emergencyType.name, laoName: r.emergencyType.laoName }
+          : null,
         reason: r.reason,
         startDate: r.startDate,
         endDate: r.endDate,
@@ -400,6 +657,8 @@ export class RequestsService {
         status: r.status,
         comment: r.comment,
         decidedAt: r.decidedAt,
+        // Approved on creation because the pool held nobody but the requester.
+        auto: r.auto,
         createdAt: r.createdAt,
         // The single chosen approver (so the requester knows who to wait for).
         approver: approverInfo.get(r.approverUserId) ?? null,

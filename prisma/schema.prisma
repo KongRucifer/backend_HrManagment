@@ -215,6 +215,10 @@ model Attendance {
   checkOutWifiId   String?          @map("check_out_wifi_id") @db.Uuid
   checkOutWifi     WifiNetwork?     @relation("CheckOutWifi", fields: [checkOutWifiId], references: [id], onDelete: SetNull)
   status           AttendanceStatus @default(on_time)
+  // Checked out before the schedule's end_time. A separate column, not an
+  // AttendanceStatus member, because arriving late and leaving early are
+  // independent facts — one status column could only record one of them.
+  leftEarly        Boolean          @default(false) @map("left_early")
   workHours        Float?           @map("work_hours")
   note             String?
   // Set when this day is covered by an APPROVED leave / emergency request.
@@ -252,7 +256,11 @@ model LeaveApprover {
 /// Types of LEAVE (admin-managed): annual leave, personal leave, ...
 model LeaveType {
   id            String         @id @default(uuid()) @db.Uuid
+  /// English name — also the fallback whenever `laoName` was never filled in.
   name          String
+  /// Lao name, shown while the app is in Lao. Nullable because types created
+  /// before this column existed have none.
+  laoName       String?        @map("lao_name")
   isActive      Boolean        @default(true) @map("is_active")
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   leaveRequests LeaveRequest[]
@@ -264,7 +272,10 @@ model LeaveType {
 /// Types of EMERGENCY (ສຸກເສີນ) requests (admin-managed): illness, accident, ...
 model EmergencyType {
   id                String             @id @default(uuid()) @db.Uuid
+  /// English name — also the fallback whenever `laoName` was never filled in.
   name              String
+  /// Lao name, shown while the app is in Lao. Nullable: see LeaveType.laoName.
+  laoName           String?            @map("lao_name")
   isActive          Boolean            @default(true) @map("is_active")
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   emergencyRequests EmergencyRequest[]
@@ -315,6 +326,10 @@ model LeaveRequestStep {
   status         RequestStatus @default(pending)
   comment        String?
   decidedAt      DateTime?     @map("decided_at") @db.Timestamptz(6)
+  /// True when the system approved this step instead of a person: the approver
+  /// on it IS the requester, and nobody reviews their own leave. Kept as its own
+  /// column (not a magic `comment`) so the timeline can label it honestly.
+  auto           Boolean       @default(false)
 
   @@map("leave_request_steps")
   @@schema("public")
@@ -338,6 +353,9 @@ model EmergencyRequest {
   status          RequestStatus @default(pending)
   comment         String?
   decidedAt       DateTime?     @map("decided_at") @db.Timestamptz(6)
+  /// True when the system approved this on creation because the pool held
+  /// nobody but the requester — there was no one else who could decide it.
+  auto            Boolean       @default(false)
   // Attendance days materialized when this request was approved.
   attendances     Attendance[]
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)

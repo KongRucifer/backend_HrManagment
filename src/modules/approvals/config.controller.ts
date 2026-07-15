@@ -35,6 +35,12 @@ class TypeDto {
   @IsString()
   name?: string;
 
+  /** Lao name. Optional: types created before this existed have none, and the
+   *  UI falls back to `name` when it is missing. */
+  @IsOptional()
+  @IsString()
+  laoName?: string;
+
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
@@ -85,7 +91,7 @@ export class ConfigController {
 
   @Post('leave-types')
   createLeaveType(@Body() dto: TypeDto) {
-    return this.config.createLeaveType(dto.name ?? '');
+    return this.config.createLeaveType(dto.name ?? '', dto.laoName);
   }
 
   @Patch('leave-types/:id')
@@ -106,7 +112,7 @@ export class ConfigController {
 
   @Post('emergency-types')
   createEmergencyType(@Body() dto: TypeDto) {
-    return this.config.createEmergencyType(dto.name ?? '');
+    return this.config.createEmergencyType(dto.name ?? '', dto.laoName);
   }
 
   @Patch('emergency-types/:id')
