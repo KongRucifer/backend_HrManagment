@@ -1,13 +1,17 @@
 import { OmitType, PartialType } from '@nestjs/swagger';
 import { CreateEmployeeDto } from './create-employee.dto';
 
-/** Account-creation fields are not updatable here; manage logins via /users. */
+/**
+ * Account fields (email/username/password/role) are not updatable here —
+ * they live on the login account; manage them via /users.
+ */
 export class UpdateEmployeeDto extends PartialType(
   OmitType(CreateEmployeeDto, [
     'createAccount',
-    'loginEmail',
+    'email',
     'username',
     'password',
     'role',
+    'existingUserId',
   ] as const),
 ) {}

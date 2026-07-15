@@ -9,6 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../../shared/decorators/current-user.decorator';
 import { Roles } from '../../../shared/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { CreateWifiDto } from './dto/create-wifi.dto';
@@ -23,8 +24,8 @@ export class WifiController {
   constructor(private readonly service: WifiService) {}
 
   @Post()
-  create(@Body() dto: CreateWifiDto) {
-    return this.service.create(dto);
+  create(@Body() dto: CreateWifiDto, @CurrentUser('userId') actorId: string) {
+    return this.service.create(dto, actorId);
   }
 
   @Get()
@@ -38,8 +39,12 @@ export class WifiController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateWifiDto) {
-    return this.service.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateWifiDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.update(id, dto, actorId);
   }
 
   @Delete(':id')

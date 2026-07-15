@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { WorkSchedule } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { attachActors } from '../../../shared/utils/actor.util';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
 import { UpdateScheduleDto } from './dto/update-schedule.dto';
 
@@ -13,7 +14,7 @@ export class ScheduleService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Creating a schedule makes it the active one; all others become inactive. */
-  async create(dto: CreateScheduleDto): Promise<WorkSchedule> {
+  async create(dto: CreateScheduleDto, actorId?: string): Promise<WorkSchedule> {
     return this.prisma.$transaction(async (tx) => {
       await tx.workSchedule.updateMany({ data: { isActive: false } });
       return tx.workSchedule.create({
@@ -23,15 +24,18 @@ export class ScheduleService {
           endTime: normalizeTime(dto.endTime)!,
           lateAfterMinutes: dto.lateAfterMinutes,
           isActive: true,
+          // On create, record only who created it (updated_by/at stay null).
+          createdById: actorId ?? null,
         },
       });
     });
   }
 
-  findAll(): Promise<WorkSchedule[]> {
-    return this.prisma.workSchedule.findMany({
+  async findAll() {
+    const schedules = await this.prisma.workSchedule.findMany({
       orderBy: [{ isActive: 'desc' }, { startTime: 'asc' }],
     });
+    return attachActors(this.prisma, schedules);
   }
 
   /** The current active schedule (or null if none). */
@@ -40,13 +44,17 @@ export class ScheduleService {
   }
 
   /** Makes one schedule active and deactivates the rest. */
-  async activate(id: string): Promise<WorkSchedule> {
+  async activate(id: string, actorId?: string): Promise<WorkSchedule> {
     await this.findOne(id);
     return this.prisma.$transaction(async (tx) => {
       await tx.workSchedule.updateMany({ data: { isActive: false } });
       return tx.workSchedule.update({
         where: { id },
-        data: { isActive: true },
+        data: {
+          isActive: true,
+          updatedAt: new Date(),
+          updatedById: actorId ?? undefined,
+        },
       });
     });
   }
@@ -61,7 +69,11 @@ export class ScheduleService {
     return schedule;
   }
 
-  async update(id: string, dto: UpdateScheduleDto): Promise<WorkSchedule> {
+  async update(
+    id: string,
+    dto: UpdateScheduleDto,
+    actorId?: string,
+  ): Promise<WorkSchedule> {
     await this.findOne(id);
     return this.prisma.workSchedule.update({
       where: { id },
@@ -70,6 +82,8 @@ export class ScheduleService {
         startTime: normalizeTime(dto.startTime),
         endTime: normalizeTime(dto.endTime),
         lateAfterMinutes: dto.lateAfterMinutes,
+        updatedAt: new Date(),
+        updatedById: actorId ?? undefined,
       },
     });
   }

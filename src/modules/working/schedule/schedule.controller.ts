@@ -9,6 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../../shared/decorators/current-user.decorator';
 import { Roles } from '../../../shared/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -23,8 +24,11 @@ export class ScheduleController {
 
   @Roles(Role.admin)
   @Post()
-  create(@Body() dto: CreateScheduleDto) {
-    return this.service.create(dto);
+  create(
+    @Body() dto: CreateScheduleDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.create(dto, actorId);
   }
 
   @Get()
@@ -39,8 +43,11 @@ export class ScheduleController {
 
   @Roles(Role.admin)
   @Patch(':id/activate')
-  activate(@Param('id', ParseUUIDPipe) id: string) {
-    return this.service.activate(id);
+  activate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.activate(id, actorId);
   }
 
   @Get(':id')

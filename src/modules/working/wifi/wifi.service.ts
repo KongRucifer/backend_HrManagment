@@ -3,8 +3,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { WifiNetwork } from '@prisma/client';
+import { Prisma, WifiNetwork } from '@prisma/client';
 import { PrismaService } from '../../../prisma/prisma.service';
+import { attachActors } from '../../../shared/utils/actor.util';
 import { CreateWifiDto } from './dto/create-wifi.dto';
 import { UpdateWifiDto } from './dto/update-wifi.dto';
 
@@ -13,14 +14,22 @@ export class WifiService {
   constructor(private readonly prisma: PrismaService) {}
 
   // ---- Admin CRUD ----
-  create(dto: CreateWifiDto): Promise<WifiNetwork> {
+  create(dto: CreateWifiDto, actorId?: string): Promise<WifiNetwork> {
     return this.prisma.wifiNetwork.create({
-      data: { ...dto, bssid: dto.bssid.toLowerCase() },
+      data: {
+        ...dto,
+        bssid: dto.bssid.toLowerCase(),
+        // On create, record only who created it (updated_by/at stay null).
+        createdById: actorId ?? null,
+      },
     });
   }
 
-  findAll(): Promise<WifiNetwork[]> {
-    return this.prisma.wifiNetwork.findMany({ orderBy: { name: 'asc' } });
+  async findAll() {
+    const networks = await this.prisma.wifiNetwork.findMany({
+      orderBy: { name: 'asc' },
+    });
+    return attachActors(this.prisma, networks);
   }
 
   async findOne(id: string): Promise<WifiNetwork> {
@@ -31,12 +40,19 @@ export class WifiService {
     return wifi;
   }
 
-  async update(id: string, dto: UpdateWifiDto): Promise<WifiNetwork> {
+  async update(
+    id: string,
+    dto: UpdateWifiDto,
+    actorId?: string,
+  ): Promise<WifiNetwork> {
     await this.findOne(id);
-    const data = { ...dto };
+    const data: Prisma.WifiNetworkUpdateInput = { ...dto };
     if (dto.bssid) {
       data.bssid = dto.bssid.toLowerCase();
     }
+    // Stamp who/when on every edit (updatedAt is manual now — not @updatedAt).
+    data.updatedAt = new Date();
+    if (actorId) data.updatedById = actorId;
     return this.prisma.wifiNetwork.update({ where: { id }, data });
   }
 

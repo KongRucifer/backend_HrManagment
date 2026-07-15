@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
@@ -9,9 +9,15 @@ import {
 import { Public } from '../../shared/decorators/public.decorator';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ConfirmOtpDto } from './dto/confirm-otp.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
+import {
+  ConfirmEmailOtpDto,
+  RequestEmailOtpDto,
+  UpdateUsernameDto,
+} from './dto/update-account.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @ApiTags('auth')
@@ -53,6 +59,16 @@ export class AuthController {
     };
   }
 
+  // Public availability check used by the mobile sign-up form (live check).
+  @Public()
+  @Get('availability')
+  checkAvailability(
+    @Query('username') username?: string,
+    @Query('email') email?: string,
+  ) {
+    return this.authService.checkAvailability(username, email);
+  }
+
   @Public()
   @Post('refresh')
   async refresh(
@@ -77,9 +93,10 @@ export class AuthController {
   }
 
   @ApiBearerAuth()
+  /** Fresh profile from the DB (the JWT payload is stale after email/username edits). */
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
-    return user;
+    return this.authService.me(user.userId);
   }
 
   @ApiBearerAuth()
@@ -88,7 +105,7 @@ export class AuthController {
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateProfileDto,
   ) {
-    return this.authService.updateProfile(user.employeeId, dto);
+    return this.authService.updateProfile(user.employeeId, dto, user.userId);
   }
 
   @ApiBearerAuth()
@@ -102,6 +119,57 @@ export class AuthController {
       dto.currentPassword,
       dto.newPassword,
     );
+  }
+
+  /** Step 1: email a one-time code to the logged-in user (for password change). */
+  @ApiBearerAuth()
+  @Post('password/request-otp')
+  requestPasswordOtp(@CurrentUser() user: AuthUser) {
+    return this.authService.requestPasswordOtp(user.userId);
+  }
+
+  /** Step 2: verify the code and set the new password. */
+  @ApiBearerAuth()
+  @Post('password/confirm-otp')
+  confirmPasswordOtp(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ConfirmOtpDto,
+  ) {
+    return this.authService.confirmPasswordOtp(
+      user.userId,
+      dto.code,
+      dto.newPassword,
+    );
+  }
+
+  /** Change your own username (the login identifier). */
+  @ApiBearerAuth()
+  @Patch('username')
+  updateUsername(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateUsernameDto,
+  ) {
+    return this.authService.updateUsername(user.userId, dto.username);
+  }
+
+  /** Step 1 of an email change: mail a code to the NEW address. */
+  @ApiBearerAuth()
+  @Post('email/request-otp')
+  requestEmailOtp(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: RequestEmailOtpDto,
+  ) {
+    return this.authService.requestEmailOtp(user.userId, dto.newEmail);
+  }
+
+  /** Step 2: verify the code and switch to the new address. */
+  @ApiBearerAuth()
+  @Post('email/confirm-otp')
+  confirmEmailOtp(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: ConfirmEmailOtpDto,
+  ) {
+    return this.authService.confirmEmailOtp(user.userId, dto.code);
   }
 
   private setAuthCookie(res: Response, token: string) {

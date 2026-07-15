@@ -19,15 +19,16 @@ export class RegisterDto {
   @MinLength(1)
   lastName: string;
 
+  /** Stored on the login account (auth.users) — used for notifications / OTP. */
   @ApiProperty({ example: 'somchai@company.la' })
   @IsEmail()
   email: string;
 
-  @ApiPropertyOptional({ example: 'somchai' })
-  @IsOptional()
+  /** The login identifier — required and unique. */
+  @ApiProperty({ example: 'somchai' })
   @IsString()
   @MinLength(3)
-  username?: string;
+  username: string;
 
   @ApiPropertyOptional({ example: '02055512345' })
   @IsOptional()

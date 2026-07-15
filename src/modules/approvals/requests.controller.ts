@@ -15,6 +15,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MinLength,
 } from 'class-validator';
 import {
@@ -25,6 +26,9 @@ import { ConfigService } from './config.service';
 import { RequestsService } from './requests.service';
 
 class CreateLeaveDto {
+  @IsUUID()
+  leaveTypeId: string;
+
   @IsString()
   @MinLength(1)
   reason: string;
@@ -35,9 +39,9 @@ class CreateLeaveDto {
   @IsDateString()
   endDate: string;
 }
-class CreateSickDto {
+class CreateEmergencyDto {
   @IsUUID()
-  sickTypeId: string;
+  emergencyTypeId: string;
 
   @IsUUID()
   approverUserId: string;
@@ -45,6 +49,21 @@ class CreateSickDto {
   @IsString()
   @MinLength(1)
   reason: string;
+
+  @IsDateString()
+  startDate: string;
+
+  @IsDateString()
+  endDate: string;
+
+  /** Optional "HH:mm" window — send BOTH or neither (whole-day request). */
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'startTime must be HH:mm' })
+  startTime?: string;
+
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'endTime must be HH:mm' })
+  endTime?: string;
 }
 class DecideDto {
   @IsBoolean()
@@ -71,14 +90,21 @@ export class RequestsController {
     return this.config.getChain();
   }
 
-  @Get('sick-types')
-  sickTypes() {
-    return this.config.listActiveSickTypes();
+  /** Active leave types (for the employee's request form). */
+  @Get('leave-types')
+  leaveTypes() {
+    return this.config.listActiveLeaveTypes();
   }
 
-  @Get('sick-approvers')
-  sickApprovers() {
-    return this.config.getSickPool();
+  /** Active emergency (ສຸກເສີນ) types (for the employee's request form). */
+  @Get('emergency-types')
+  emergencyTypes() {
+    return this.config.listActiveEmergencyTypes();
+  }
+
+  @Get('emergency-approvers')
+  emergencyApprovers() {
+    return this.config.getEmergencyPool();
   }
 
   // ---- create ----
@@ -87,9 +113,12 @@ export class RequestsController {
     return this.requests.createLeave(this.emp(user), dto);
   }
 
-  @Post('sick')
-  createSick(@CurrentUser() user: AuthUser, @Body() dto: CreateSickDto) {
-    return this.requests.createSick(this.emp(user), dto);
+  @Post('emergency')
+  createEmergency(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: CreateEmergencyDto,
+  ) {
+    return this.requests.createEmergency(this.emp(user), dto);
   }
 
   // ---- my requests ----
@@ -98,9 +127,9 @@ export class RequestsController {
     return this.requests.myLeave(this.emp(user));
   }
 
-  @Get('sick/mine')
-  mySick(@CurrentUser() user: AuthUser) {
-    return this.requests.mySick(this.emp(user));
+  @Get('emergency/mine')
+  myEmergency(@CurrentUser() user: AuthUser) {
+    return this.requests.myEmergency(this.emp(user));
   }
 
   // ---- inbox (combined to-approve) ----
@@ -108,11 +137,11 @@ export class RequestsController {
   // a chain approver sees a leave request only once it reaches their step.
   @Get('inbox')
   async inbox(@CurrentUser() user: AuthUser) {
-    const [leave, sick] = await Promise.all([
+    const [leave, emergency] = await Promise.all([
       this.requests.leaveToApprove(user.userId),
-      this.requests.sickToApprove(user.userId),
+      this.requests.emergencyToApprove(user.userId),
     ]);
-    return [...leave, ...sick]
+    return [...leave, ...emergency]
       .filter((x: any) => x.actionable === true)
       .sort(
         (a: any, b: any) =>
@@ -130,13 +159,18 @@ export class RequestsController {
     return this.requests.decideLeave(user.userId, id, dto.approve, dto.comment);
   }
 
-  @Patch('sick/:id/decide')
-  decideSick(
+  @Patch('emergency/:id/decide')
+  decideEmergency(
     @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DecideDto,
   ) {
-    return this.requests.decideSick(user.userId, id, dto.approve, dto.comment);
+    return this.requests.decideEmergency(
+      user.userId,
+      id,
+      dto.approve,
+      dto.comment,
+    );
   }
 
   private emp(user: AuthUser): string {

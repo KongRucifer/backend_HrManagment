@@ -7,8 +7,10 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -23,13 +25,22 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Post()
-  create(@Body() dto: CreateUserDto) {
-    return this.usersService.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser('userId') actorId: string) {
+    return this.usersService.create(dto, actorId);
   }
 
   @Get()
   findAll() {
     return this.usersService.findAll();
+  }
+
+  // Declared before ":id" so "availability" isn't parsed as a UUID param.
+  @Get('availability')
+  checkAvailability(
+    @Query('username') username?: string,
+    @Query('email') email?: string,
+  ) {
+    return this.usersService.checkAvailability(username, email);
   }
 
   @Get(':id')
@@ -38,8 +49,12 @@ export class UsersController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUserDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.usersService.update(id, dto, actorId);
   }
 
   @Delete(':id')

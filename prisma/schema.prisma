@@ -36,11 +36,14 @@ enum RequestStatus {
   @@schema("public")
 }
 
+// Value order MUST match pg_enum.enumsortorder, else `db push` sees a diff and
+// tries to recreate the type (which would destroy data).
 enum AttendanceStatus {
-  present
+  on_time
   late
   absent
   leave
+  emergency
 
   @@schema("public")
 }
@@ -49,18 +52,56 @@ enum AttendanceStatus {
 
 model User {
   id           String    @id @default(uuid()) @db.Uuid
+  // Login identifier. Email is kept for notifications / password-reset OTP.
+  username     String    @unique
   email        String    @unique
-  username     String?   @unique
   passwordHash String    @map("password_hash")
   role         Role      @default(employee)
   // Links to public.employees.id (kept as a plain scalar, no cross-schema FK).
   employeeId   String?   @map("employee_id") @db.Uuid
   isActive     Boolean   @default(true) @map("is_active")
   lastLogin    DateTime? @map("last_login") @db.Timestamptz(6)
+  // Audit: auth.users.id of who created / last updated this row (scalar, no FK).
+  createdById  String?   @map("created_by") @db.Uuid
+  updatedById  String?   @map("updated_by") @db.Uuid
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // Null until the row is first updated (set manually on update, never on create).
+  updatedAt    DateTime? @map("updated_at") @db.Timestamptz(6)
 
   @@map("users")
+  @@schema("auth")
+}
+
+/// One-time codes for email-verified password changes (short-lived).
+/// userId links to auth.users.id.
+model PasswordOtp {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  codeHash  String   @map("code_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  attempts  Int      @default(0)
+  consumed  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("password_otps")
+  @@schema("auth")
+}
+
+/// One-time codes for verifying a NEW email address before switching to it.
+/// The code is sent to `newEmail` (proves the user owns that address).
+model EmailOtp {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  newEmail  String   @map("new_email")
+  codeHash  String   @map("code_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  attempts  Int      @default(0)
+  consumed  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@map("email_otps")
   @@schema("auth")
 }
 
@@ -98,8 +139,12 @@ model WorkSchedule {
   endTime          String     @map("end_time")
   lateAfterMinutes Int        @default(0) @map("late_after_minutes")
   isActive         Boolean    @default(true) @map("is_active")
+  // Audit: auth.users.id of who created / last updated this row (scalar, no FK).
+  createdById      String?    @map("created_by") @db.Uuid
+  updatedById      String?    @map("updated_by") @db.Uuid
   createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // Null until the row is first updated (set manually on update, never on create).
+  updatedAt        DateTime?  @map("updated_at") @db.Timestamptz(6)
   employees        Employee[]
 
   @@map("work_schedules")
@@ -111,23 +156,25 @@ model Employee {
   employeeCode   String         @unique @map("employee_code")
   firstName      String         @map("first_name")
   lastName       String         @map("last_name")
-  email          String?
+  // NOTE: no email here — email lives ONLY on auth.users (the login account).
   phone          String?
   departmentId   String?        @map("department_id") @db.Uuid
   department     Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  position       String?
   positionId     String?        @map("position_id") @db.Uuid
   positionRef    Position?      @relation(fields: [positionId], references: [id], onDelete: SetNull)
   birthDate      DateTime?      @map("birth_date") @db.Date
-  hireDate       DateTime?      @map("hire_date") @db.Date
   status         EmployeeStatus @default(active)
   workScheduleId String?        @map("work_schedule_id") @db.Uuid
   workSchedule   WorkSchedule?  @relation(fields: [workScheduleId], references: [id], onDelete: SetNull)
+  // Audit: auth.users.id of who created / last updated this row (scalar, no FK).
+  createdById    String?        @map("created_by") @db.Uuid
+  updatedById    String?        @map("updated_by") @db.Uuid
   createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
-  attendances    Attendance[]
-  leaveRequests  LeaveRequest[]
-  sickRequests   SickRequest[]
+  // Null until the row is first updated (set manually on update, never on create).
+  updatedAt      DateTime?      @map("updated_at") @db.Timestamptz(6)
+  attendances       Attendance[]
+  leaveRequests     LeaveRequest[]
+  emergencyRequests EmergencyRequest[]
 
   @@map("employees")
   @@schema("public")
@@ -140,8 +187,12 @@ model WifiNetwork {
   bssid     String   @unique
   wifiCode  String?  @map("wifi_code")
   isActive  Boolean  @default(true) @map("is_active")
+  // Audit: auth.users.id of who created / last updated this row (scalar, no FK).
+  createdById String? @map("created_by") @db.Uuid
+  updatedById String? @map("updated_by") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  // Null until the row is first updated (set manually on update, never on create).
+  updatedAt DateTime? @map("updated_at") @db.Timestamptz(6)
 
   checkInAttendances  Attendance[] @relation("CheckInWifi")
   checkOutAttendances Attendance[] @relation("CheckOutWifi")
@@ -163,18 +214,28 @@ model Attendance {
   checkInWifi      WifiNetwork?     @relation("CheckInWifi", fields: [checkInWifiId], references: [id], onDelete: SetNull)
   checkOutWifiId   String?          @map("check_out_wifi_id") @db.Uuid
   checkOutWifi     WifiNetwork?     @relation("CheckOutWifi", fields: [checkOutWifiId], references: [id], onDelete: SetNull)
-  status           AttendanceStatus @default(present)
+  status           AttendanceStatus @default(on_time)
   workHours        Float?           @map("work_hours")
   note             String?
+  // Set when this day is covered by an APPROVED leave / emergency request.
+  // A relation (not a bool) so the type NAME can be joined for the UI label.
+  // NOTE: a partial-day emergency keeps status on_time/late and carries only
+  // the FK — so "is this day covered?" is answered by the FK, never by status.
+  leaveRequestId     String?           @map("leave_request_id") @db.Uuid
+  leaveRequest       LeaveRequest?     @relation(fields: [leaveRequestId], references: [id], onDelete: SetNull)
+  emergencyRequestId String?           @map("emergency_request_id") @db.Uuid
+  emergencyRequest   EmergencyRequest? @relation(fields: [emergencyRequestId], references: [id], onDelete: SetNull)
   createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@unique([employeeId, workDate])
+  @@index([leaveRequestId])
+  @@index([emergencyRequestId])
   @@map("attendances")
   @@schema("public")
 }
 
-// ---------------- Leave / Sick approval workflow ----------------
+// ---------------- Leave / Emergency approval workflow ----------------
 
 /// Global ordered approval chain for LEAVE requests (step 1, 2, 3, ...).
 /// approverUserId links to auth.users.id (kept as a scalar, cross-schema).
@@ -188,25 +249,37 @@ model LeaveApprover {
   @@schema("public")
 }
 
-/// Types of sick / illness leave (admin-managed): pain, fever, accident, ...
-model SickType {
-  id           String        @id @default(uuid()) @db.Uuid
-  name         String
-  isActive     Boolean       @default(true) @map("is_active")
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  sickRequests SickRequest[]
+/// Types of LEAVE (admin-managed): annual leave, personal leave, ...
+model LeaveType {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String
+  isActive      Boolean        @default(true) @map("is_active")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  leaveRequests LeaveRequest[]
 
-  @@map("sick_types")
+  @@map("leave_types")
   @@schema("public")
 }
 
-/// Pool of users who MAY approve sick requests (requester picks one).
-model SickApprover {
+/// Types of EMERGENCY (ສຸກເສີນ) requests (admin-managed): illness, accident, ...
+model EmergencyType {
+  id                String             @id @default(uuid()) @db.Uuid
+  name              String
+  isActive          Boolean            @default(true) @map("is_active")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  emergencyRequests EmergencyRequest[]
+
+  @@map("emergency_types")
+  @@schema("public")
+}
+
+/// Pool of users who MAY approve emergency requests (requester picks one).
+model EmergencyApprover {
   id             String   @id @default(uuid()) @db.Uuid
   approverUserId String   @unique @map("approver_user_id") @db.Uuid
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@map("sick_approvers")
+  @@map("emergency_approvers")
   @@schema("public")
 }
 
@@ -215,12 +288,16 @@ model LeaveRequest {
   id          String             @id @default(uuid()) @db.Uuid
   employeeId  String             @map("employee_id") @db.Uuid
   employee    Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId String             @map("leave_type_id") @db.Uuid
+  leaveType   LeaveType          @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
   reason      String
   startDate   DateTime           @map("start_date") @db.Date
   endDate     DateTime           @map("end_date") @db.Date
   status      RequestStatus      @default(pending)
   currentStep Int                @default(1) @map("current_step")
   steps       LeaveRequestStep[]
+  // Attendance days materialized when this request was fully approved.
+  attendances Attendance[]
   createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -243,21 +320,29 @@ model LeaveRequestStep {
   @@schema("public")
 }
 
-/// A sick request submitted by an employee (single chosen approver).
-model SickRequest {
-  id             String        @id @default(uuid()) @db.Uuid
-  employeeId     String        @map("employee_id") @db.Uuid
-  employee       Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  sickTypeId     String        @map("sick_type_id") @db.Uuid
-  sickType       SickType      @relation(fields: [sickTypeId], references: [id], onDelete: Restrict)
-  approverUserId String        @map("approver_user_id") @db.Uuid
-  reason         String
-  status         RequestStatus @default(pending)
-  comment        String?
-  decidedAt      DateTime?     @map("decided_at") @db.Timestamptz(6)
-  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+/// An emergency (ສຸກເສີນ) request submitted by an employee (single chosen approver).
+model EmergencyRequest {
+  id              String        @id @default(uuid()) @db.Uuid
+  employeeId      String        @map("employee_id") @db.Uuid
+  employee        Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  emergencyTypeId String        @map("emergency_type_id") @db.Uuid
+  emergencyType   EmergencyType @relation(fields: [emergencyTypeId], references: [id], onDelete: Restrict)
+  approverUserId  String        @map("approver_user_id") @db.Uuid
+  reason          String
+  startDate       DateTime      @map("start_date") @db.Date
+  endDate         DateTime      @map("end_date") @db.Date
+  // Optional time window ("HH:mm"). Either BOTH are set (a partial-day request)
+  // or both are null (whole-day request). Same convention as WorkSchedule.
+  startTime       String?       @map("start_time")
+  endTime         String?       @map("end_time")
+  status          RequestStatus @default(pending)
+  comment         String?
+  decidedAt       DateTime?     @map("decided_at") @db.Timestamptz(6)
+  // Attendance days materialized when this request was approved.
+  attendances     Attendance[]
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@map("sick_requests")
+  @@map("emergency_requests")
   @@schema("public")
 }
 

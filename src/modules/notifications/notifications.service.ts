@@ -27,12 +27,18 @@ export class NotificationsService {
       where: { userId },
       select: { token: true },
     });
-    await this.fcm.send(
+    const dead = await this.fcm.send(
       tokens.map((t) => t.token),
       input.title,
       input.body,
       { type: input.type, refId: input.refId ?? '' },
     );
+    // Purge tokens FCM reported as unregistered / invalid so they don't pile up.
+    if (dead.length) {
+      await this.prisma.deviceToken.deleteMany({
+        where: { token: { in: dead } },
+      });
+    }
   }
 
   list(userId: string) {

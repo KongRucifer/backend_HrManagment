@@ -1,6 +1,6 @@
 {
   "errors": {
-    "invalid_credentials": "Invalid email or password",
+    "invalid_credentials": "Invalid username or password",
     "invalid_token": "Session expired, please sign in again",
     "account_disabled": "This account has been disabled",
     "wifi_required": "Please connect to the office WiFi before checking in/out",
@@ -17,13 +17,23 @@
     "username_taken": "This username is already taken",
     "email_taken": "This email is already registered",
     "login_email_required": "A login email is required to create an account",
+    "account_already_linked": "This account is already linked to an employee",
     "wrong_password": "Current password is incorrect",
     "invalid_token": "Session expired, please sign in again",
     "not_found": "Not found",
     "no_leave_chain": "No leave approval chain configured yet",
     "already_decided": "This request has already been decided",
     "not_your_turn": "It is not your turn to approve this request",
-    "invalid_approver": "The selected approver is not allowed"
+    "invalid_approver": "The selected approver is not allowed",
+    "password_too_short": "Password must be at least 8 characters",
+    "otp_not_found": "No code found — please request a new one",
+    "otp_expired": "This code has expired — please request a new one",
+    "otp_invalid": "The code is incorrect",
+    "otp_too_many_attempts": "Too many wrong attempts — please request a new code",
+    "end_before_start": "The end date cannot be before the start date",
+    "time_pair_required": "Please enter both the start time and the end time",
+    "end_time_after_start": "On the same day, the end time must be after the start time",
+    "outside_work_hours": "That time is outside working hours"
   },
   "messages": {
     "check_in_success": "Check-in successful",

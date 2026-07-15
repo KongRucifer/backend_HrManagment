@@ -71,35 +71,61 @@ export class ConfigService {
     return this.getChain();
   }
 
-  // ---------------- Sick types ----------------
-  listSickTypes() {
-    return this.prisma.sickType.findMany({ orderBy: { createdAt: 'asc' } });
+  // ---------------- Leave types ----------------
+  listLeaveTypes() {
+    return this.prisma.leaveType.findMany({ orderBy: { createdAt: 'asc' } });
   }
 
   /** Active types only (for the employee's request form). */
-  listActiveSickTypes() {
-    return this.prisma.sickType.findMany({
+  listActiveLeaveTypes() {
+    return this.prisma.leaveType.findMany({
       where: { isActive: true },
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  createSickType(name: string) {
-    return this.prisma.sickType.create({ data: { name } });
+  createLeaveType(name: string) {
+    return this.prisma.leaveType.create({ data: { name } });
   }
 
-  updateSickType(id: string, data: { name?: string; isActive?: boolean }) {
-    return this.prisma.sickType.update({ where: { id }, data });
+  updateLeaveType(id: string, data: { name?: string; isActive?: boolean }) {
+    return this.prisma.leaveType.update({ where: { id }, data });
   }
 
-  async deleteSickType(id: string) {
-    await this.prisma.sickType.delete({ where: { id } });
+  async deleteLeaveType(id: string) {
+    await this.prisma.leaveType.delete({ where: { id } });
     return { success: true };
   }
 
-  // ---------------- Sick approver pool ----------------
-  async getSickPool() {
-    const rows = await this.prisma.sickApprover.findMany({
+  // ---------------- Emergency (ສຸກເສີນ) types ----------------
+  listEmergencyTypes() {
+    return this.prisma.emergencyType.findMany({ orderBy: { createdAt: 'asc' } });
+  }
+
+  /** Active types only (for the employee's request form). */
+  listActiveEmergencyTypes() {
+    return this.prisma.emergencyType.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  createEmergencyType(name: string) {
+    return this.prisma.emergencyType.create({ data: { name } });
+  }
+
+  updateEmergencyType(id: string, data: { name?: string; isActive?: boolean }) {
+    return this.prisma.emergencyType.update({ where: { id }, data });
+  }
+
+  async deleteEmergencyType(id: string) {
+    await this.prisma.emergencyType.delete({ where: { id } });
+    return { success: true };
+  }
+
+  // ---------------- Emergency approver pool ----------------
+  async getEmergencyPool() {
+    const rows = await this.prisma.emergencyApprover.findMany({
       orderBy: { createdAt: 'asc' },
     });
     const info = await this.lookup.resolve(rows.map((r) => r.approverUserId));
@@ -110,17 +136,17 @@ export class ConfigService {
     }));
   }
 
-  async addSickApprovers(userIds: string[]) {
+  async addEmergencyApprovers(userIds: string[]) {
     for (const uid of userIds) {
-      await this.prisma.sickApprover
+      await this.prisma.emergencyApprover
         .create({ data: { approverUserId: uid } })
         .catch(() => undefined); // ignore duplicates (unique)
     }
-    return this.getSickPool();
+    return this.getEmergencyPool();
   }
 
-  async removeSickApprover(id: string) {
-    await this.prisma.sickApprover.delete({ where: { id } });
-    return this.getSickPool();
+  async removeEmergencyApprover(id: string) {
+    await this.prisma.emergencyApprover.delete({ where: { id } });
+    return this.getEmergencyPool();
   }
 }

@@ -29,6 +29,11 @@ export class CreateEmployeeDto {
   @IsString()
   lastName: string;
 
+  /**
+   * Email for the NEW login account (required when createAccount is true and no
+   * existingUserId is given). Employees themselves no longer store an email —
+   * it lives on auth.users only.
+   */
   @ApiPropertyOptional({ example: 'somchai@company.la' })
   @IsOptional()
   @IsEmail()
@@ -44,11 +49,6 @@ export class CreateEmployeeDto {
   @IsUUID()
   departmentId?: string;
 
-  @ApiPropertyOptional({ example: 'Developer' })
-  @IsOptional()
-  @IsString()
-  position?: string;
-
   @ApiPropertyOptional({ description: 'Position id (from the positions table)' })
   @IsOptional()
   @IsUUID()
@@ -58,11 +58,6 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsDateString()
   birthDate?: string;
-
-  @ApiPropertyOptional({ example: '2026-01-15' })
-  @IsOptional()
-  @IsDateString()
-  hireDate?: string;
 
   @ApiPropertyOptional({ enum: EmployeeStatus })
   @IsOptional()
@@ -83,14 +78,7 @@ export class CreateEmployeeDto {
   @IsBoolean()
   createAccount?: boolean;
 
-  @ApiPropertyOptional({
-    description: 'Login email (defaults to the employee email). Login is by email.',
-  })
-  @IsOptional()
-  @IsEmail()
-  loginEmail?: string;
-
-  @ApiPropertyOptional({ description: 'Optional display handle (defaults to employeeCode)' })
+  @ApiPropertyOptional({ description: 'Login username (defaults to employeeCode)' })
   @IsOptional()
   @IsString()
   @MinLength(3)
@@ -106,4 +94,13 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsEnum(Role)
   role?: Role;
+
+  @ApiPropertyOptional({
+    description:
+      'Link this already-existing account to the new employee instead of ' +
+      'creating one. When set, username/password/role are ignored.',
+  })
+  @IsOptional()
+  @IsUUID()
+  existingUserId?: string;
 }

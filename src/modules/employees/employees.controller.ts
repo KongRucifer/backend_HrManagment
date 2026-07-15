@@ -10,6 +10,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../shared/decorators/current-user.decorator';
 import { Roles } from '../../shared/decorators/roles.decorator';
 import { Role } from '@prisma/client';
 import { CreateEmployeeDto } from './dto/create-employee.dto';
@@ -25,8 +26,11 @@ export class EmployeesController {
 
   @Roles(Role.admin)
   @Post()
-  create(@Body() dto: CreateEmployeeDto) {
-    return this.service.create(dto);
+  create(
+    @Body() dto: CreateEmployeeDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.create(dto, actorId);
   }
 
   @Roles(Role.admin)
@@ -51,8 +55,9 @@ export class EmployeesController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateEmployeeDto,
+    @CurrentUser('userId') actorId: string,
   ) {
-    return this.service.update(id, dto);
+    return this.service.update(id, dto, actorId);
   }
 
   @Roles(Role.admin)

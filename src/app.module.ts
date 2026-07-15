@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import {
   AcceptLanguageResolver,
   HeaderResolver,
@@ -16,6 +17,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { DepartmentsModule } from './modules/departments/departments.module';
 import { EmployeesModule } from './modules/employees/employees.module';
+import { MailModule } from './modules/mail/mail.module';
 import { PositionsModule } from './modules/positions/positions.module';
 import { RecruitmentModule } from './modules/recruitment/recruitment.module';
 import { SeedModule } from './modules/seed/seed.module';
@@ -50,6 +52,9 @@ import { SharedModule } from './shared/shared.module';
       ],
     }),
     SharedModule,
+    MailModule,
+    // Cron runner (the nightly "mark absent" job lives in AttendanceService).
+    ScheduleModule.forRoot(),
 
     // Core modules
     AuthModule,

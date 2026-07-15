@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Employee, Prisma, Role } from '@prisma/client';
+import { Employee, Prisma, Role, User } from '@prisma/client';
 import { PaginatedResult } from '../../shared/dto/pagination.dto';
+import { ActorRef, attachActors } from '../../shared/utils/actor.util';
 import { getWorkDate, toDateOnly } from '../../shared/utils/datetime.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -21,6 +23,13 @@ const employeeInclude = {
 export type EmployeeWithRelations = Prisma.EmployeeGetPayload<{
   include: typeof employeeInclude;
 }>;
+
+export type EmployeeListItem = EmployeeWithRelations & {
+  createdBy: ActorRef | null;
+  updatedBy: ActorRef | null;
+  /** The linked login account (email/username live there now), if any. */
+  account: { username: string; email: string } | null;
+};
 
 @Injectable()
 export class EmployeesService {
@@ -48,7 +57,7 @@ export class EmployeesService {
     return `EMP${(max + 1).toString().padStart(5, '0')}`;
   }
 
-  async create(dto: CreateEmployeeDto): Promise<Employee> {
+  async create(dto: CreateEmployeeDto, actorId?: string): Promise<Employee> {
     // Auto-assign the active work schedule when none is provided.
     let workScheduleId = dto.workScheduleId ?? null;
     if (!workScheduleId) {
@@ -59,19 +68,46 @@ export class EmployeesService {
       workScheduleId = active?.id ?? null;
     }
 
+    // Resolve the login account up-front (when linking an existing one) so it is
+    // validated BEFORE creating the employee — this avoids leaving an orphaned
+    // employee behind if a later step fails.
+    let linkUser: User | null = null;
+    if (dto.createAccount && dto.existingUserId) {
+      linkUser = await this.prisma.user.findUnique({
+        where: { id: dto.existingUserId },
+      });
+      if (!linkUser) {
+        throw new NotFoundException('common.errors.user_not_found');
+      }
+      if (linkUser.employeeId) {
+        throw new BadRequestException('common.errors.account_already_linked');
+      }
+    }
+
+    // A brand-new account needs a free email / username — check before creating
+    // the employee so a conflict can't orphan one.
+    if (dto.createAccount && !linkUser) {
+      if (!dto.email) {
+        throw new BadRequestException('common.errors.login_email_required');
+      }
+      if (await this.usersService.isEmailTaken(dto.email)) {
+        throw new ConflictException('common.errors.email_taken');
+      }
+    }
+
     const base = {
       firstName: dto.firstName,
       lastName: dto.lastName,
-      email: dto.email ?? null,
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
-      position: dto.position ?? null,
       positionId: dto.positionId ?? null,
       birthDate: dto.birthDate ? toDateOnly(dto.birthDate) : null,
-      hireDate: dto.hireDate ? toDateOnly(dto.hireDate) : null,
       // Status defaults to "active" (schema default) unless explicitly set.
       status: dto.status,
       workScheduleId,
+      // On create we record only who created it — updated_by/updated_at stay null
+      // until the row is actually edited.
+      createdById: actorId ?? null,
     };
 
     // Create with an auto-generated code, retrying if two requests collide.
@@ -83,12 +119,9 @@ export class EmployeesService {
           data: { ...base, employeeCode },
         });
       } catch (e) {
-        // P2002 = unique constraint (code already taken) -> regenerate & retry.
-        if (
-          !dto.employeeCode &&
-          (e as { code?: string })?.code === 'P2002' &&
-          attempt < 4
-        ) {
+        const code = (e as { code?: string })?.code;
+        // P2002 on the employee code = regenerate & retry.
+        if (!dto.employeeCode && code === 'P2002' && attempt < 4) {
           continue;
         }
         throw e;
@@ -99,19 +132,27 @@ export class EmployeesService {
       throw new BadRequestException('common.errors.employee_not_found');
     }
 
-    // Optionally provision a login account (login is by email) for this employee.
+    // Optionally attach a login account for this employee: either link an
+    // existing account, or provision a brand-new one (login is by email).
     if (dto.createAccount) {
-      const email = dto.loginEmail ?? dto.email;
-      if (!email) {
-        throw new BadRequestException('common.errors.login_email_required');
+      if (linkUser) {
+        // Attach the (already validated) existing account to this new employee.
+        await this.prisma.user.update({
+          where: { id: linkUser.id },
+          data: { employeeId: employee.id },
+        });
+      } else {
+        await this.usersService.create(
+          {
+            email: dto.email!,
+            username: dto.username ?? employee.employeeCode,
+            password: dto.password ?? employee.employeeCode,
+            role: dto.role ?? Role.employee,
+            employeeId: employee.id,
+          },
+          actorId,
+        );
       }
-      await this.usersService.create({
-        email,
-        username: dto.username ?? employee.employeeCode,
-        password: dto.password ?? employee.employeeCode,
-        role: dto.role ?? Role.employee,
-        employeeId: employee.id,
-      });
     }
 
     return employee;
@@ -119,7 +160,7 @@ export class EmployeesService {
 
   async findAll(
     query: QueryEmployeeDto,
-  ): Promise<PaginatedResult<EmployeeWithRelations>> {
+  ): Promise<PaginatedResult<EmployeeListItem>> {
     const where: Prisma.EmployeeWhereInput = {};
 
     // Exclude employees whose linked account is an admin (not shown here).
@@ -155,8 +196,17 @@ export class EmployeesService {
       this.prisma.employee.count({ where }),
     ]);
 
+    // Email/username live on the login account — attach them for display.
+    const withActors = await attachActors(this.prisma, items);
+    const accounts = await this.usersService.accountsOfEmployees(
+      items.map((e) => e.id),
+    );
+
     return {
-      items,
+      items: withActors.map((e) => ({
+        ...e,
+        account: accounts.get(e.id) ?? null,
+      })),
       total,
       page: query.page,
       limit: query.limit,
@@ -175,21 +225,23 @@ export class EmployeesService {
     return employee;
   }
 
-  async update(id: string, dto: UpdateEmployeeDto): Promise<Employee> {
-    await this.findOne(id);
+  async update(
+    id: string,
+    dto: UpdateEmployeeDto,
+    actorId?: string,
+  ): Promise<Employee> {
+    const current = await this.findOne(id);
     const data: Prisma.EmployeeUpdateInput = {};
+    // Stamp who/when on every edit (updatedAt is manual now — not @updatedAt).
+    data.updatedAt = new Date();
+    if (actorId) data.updatedById = actorId;
     if (dto.employeeCode !== undefined) data.employeeCode = dto.employeeCode;
     if (dto.firstName !== undefined) data.firstName = dto.firstName;
     if (dto.lastName !== undefined) data.lastName = dto.lastName;
-    if (dto.email !== undefined) data.email = dto.email;
     if (dto.phone !== undefined) data.phone = dto.phone;
-    if (dto.position !== undefined) data.position = dto.position;
     if (dto.status !== undefined) data.status = dto.status;
     if (dto.birthDate !== undefined) {
       data.birthDate = dto.birthDate ? toDateOnly(dto.birthDate) : null;
-    }
-    if (dto.hireDate !== undefined) {
-      data.hireDate = dto.hireDate ? toDateOnly(dto.hireDate) : null;
     }
     if (dto.departmentId !== undefined) {
       data.department = dto.departmentId
@@ -211,8 +263,17 @@ export class EmployeesService {
 
   async remove(id: string): Promise<void> {
     await this.findOne(id);
-    // Deleting an employee also removes its linked login account.
+    // Deleting an employee also removes its linked login account — and that
+    // account's push device tokens / notifications, which reference the user by
+    // a cross-schema scalar (no FK cascade), so they must be cleared explicitly.
+    const users = await this.prisma.user.findMany({
+      where: { employeeId: id },
+      select: { id: true },
+    });
+    const userIds = users.map((u) => u.id);
     await this.prisma.$transaction([
+      this.prisma.deviceToken.deleteMany({ where: { userId: { in: userIds } } }),
+      this.prisma.notification.deleteMany({ where: { userId: { in: userIds } } }),
       this.prisma.user.deleteMany({ where: { employeeId: id } }),
       this.prisma.employee.delete({ where: { id } }),
     ]);

@@ -71,10 +71,16 @@ export class SeedService implements OnModuleInit {
     const username = this.config.get<string>('seed.adminUsername') || 'admin';
     const password = this.config.get<string>('seed.adminPassword') || 'admin123';
 
+    // Check by USERNAME (the login identity), not email: the admin can change
+    // their own email, and checking by email would then look like "no admin
+    // exists" and try to re-create one — failing on the unique username and
+    // crashing startup.
+    if (await this.usersService.findByUsername(username)) return;
+    // Also skip when the seed email is already taken by some other account.
     if (await this.usersService.findByEmail(email)) return;
 
     await this.usersService.create({ email, username, password, role: Role.admin });
-    this.logger.log(`Seeded default admin account: "${email}"`);
+    this.logger.log(`Seeded default admin account: "${username}"`);
   }
 
   private async seedDefaultSchedule(): Promise<void> {

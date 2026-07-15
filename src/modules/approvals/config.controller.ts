@@ -29,9 +29,11 @@ class UserIdsDto {
   @IsUUID('4', { each: true })
   userIds: string[];
 }
-class SickTypeDto {
+/** Create/update payload for a leave or emergency type. */
+class TypeDto {
+  @IsOptional()
   @IsString()
-  name: string;
+  name?: string;
 
   @IsOptional()
   @IsBoolean()
@@ -75,40 +77,64 @@ export class ConfigController {
     return this.config.removeChainApprover(id);
   }
 
-  // ---- Sick types ----
-  @Get('sick-types')
-  sickTypes() {
-    return this.config.listSickTypes();
+  // ---- Leave types ----
+  @Get('leave-types')
+  leaveTypes() {
+    return this.config.listLeaveTypes();
   }
 
-  @Post('sick-types')
-  createSickType(@Body() dto: SickTypeDto) {
-    return this.config.createSickType(dto.name);
+  @Post('leave-types')
+  createLeaveType(@Body() dto: TypeDto) {
+    return this.config.createLeaveType(dto.name ?? '');
   }
 
-  @Patch('sick-types/:id')
-  updateSickType(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SickTypeDto) {
-    return this.config.updateSickType(id, dto);
+  @Patch('leave-types/:id')
+  updateLeaveType(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TypeDto) {
+    return this.config.updateLeaveType(id, dto);
   }
 
-  @Delete('sick-types/:id')
-  deleteSickType(@Param('id', ParseUUIDPipe) id: string) {
-    return this.config.deleteSickType(id);
+  @Delete('leave-types/:id')
+  deleteLeaveType(@Param('id', ParseUUIDPipe) id: string) {
+    return this.config.deleteLeaveType(id);
   }
 
-  // ---- Sick approver pool ----
-  @Get('sick-pool')
-  sickPool() {
-    return this.config.getSickPool();
+  // ---- Emergency (ສຸກເສີນ) types ----
+  @Get('emergency-types')
+  emergencyTypes() {
+    return this.config.listEmergencyTypes();
   }
 
-  @Post('sick-pool')
+  @Post('emergency-types')
+  createEmergencyType(@Body() dto: TypeDto) {
+    return this.config.createEmergencyType(dto.name ?? '');
+  }
+
+  @Patch('emergency-types/:id')
+  updateEmergencyType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: TypeDto,
+  ) {
+    return this.config.updateEmergencyType(id, dto);
+  }
+
+  @Delete('emergency-types/:id')
+  deleteEmergencyType(@Param('id', ParseUUIDPipe) id: string) {
+    return this.config.deleteEmergencyType(id);
+  }
+
+  // ---- Emergency approver pool ----
+  @Get('emergency-pool')
+  emergencyPool() {
+    return this.config.getEmergencyPool();
+  }
+
+  @Post('emergency-pool')
   addPool(@Body() dto: UserIdsDto) {
-    return this.config.addSickApprovers(dto.userIds);
+    return this.config.addEmergencyApprovers(dto.userIds);
   }
 
-  @Delete('sick-pool/:id')
+  @Delete('emergency-pool/:id')
   removePool(@Param('id', ParseUUIDPipe) id: string) {
-    return this.config.removeSickApprover(id);
+    return this.config.removeEmergencyApprover(id);
   }
 }
