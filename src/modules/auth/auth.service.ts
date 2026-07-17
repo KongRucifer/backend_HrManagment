@@ -51,32 +51,33 @@ export class AuthService {
 
   /**
    * Public "forgot password" step 1: look the account up by email and mail it a
-   * reset OTP. Always returns success (never reveals whether an account with
-   * that email exists) — a code is only actually sent when it does.
+   * reset OTP. Rejects when the email is not registered so the user knows to
+   * check it (a deliberate choice over hiding whether the account exists).
    */
   async requestPasswordReset(email: string): Promise<{ success: true }> {
     const user = await this.prisma.user.findFirst({
       where: { email: email.trim(), deletedAt: null, isActive: true },
     });
-    if (user) {
-      const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
-      const codeHash = await bcrypt.hash(code, 10);
-      const expiresAt = new Date(Date.now() + 10 * 60_000); // 10 minutes
-      await this.prisma.$transaction([
-        this.prisma.passwordOtp.deleteMany({ where: { userId: user.id } }),
-        this.prisma.passwordOtp.create({
-          data: { userId: user.id, codeHash, expiresAt },
-        }),
-      ]);
-      await this.mail.sendPasswordOtp(user.email, code);
+    if (!user) {
+      throw new BadRequestException('common.errors.email_not_registered');
     }
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + 10 * 60_000); // 10 minutes
+    await this.prisma.$transaction([
+      this.prisma.passwordOtp.deleteMany({ where: { userId: user.id } }),
+      this.prisma.passwordOtp.create({
+        data: { userId: user.id, codeHash, expiresAt },
+      }),
+    ]);
+    await this.mail.sendPasswordOtp(user.email, code);
     return { success: true };
   }
 
   /**
    * Public "forgot password" step 2: verify the emailed code for that account
    * and set the new password. Reuses the same OTP verification as the logged-in
-   * flow. A missing account is reported as an invalid code (no enumeration).
+   * flow.
    */
   async confirmPasswordReset(
     email: string,
@@ -86,7 +87,9 @@ export class AuthService {
     const user = await this.prisma.user.findFirst({
       where: { email: email.trim(), deletedAt: null, isActive: true },
     });
-    if (!user) throw new BadRequestException('common.errors.otp_invalid');
+    if (!user) {
+      throw new BadRequestException('common.errors.email_not_registered');
+    }
     return this.confirmPasswordOtp(user.id, code, newPassword);
   }
 

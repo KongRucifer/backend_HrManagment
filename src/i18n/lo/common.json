@@ -17,6 +17,7 @@
     "schedule_not_found": "ບໍ່ພົບຕາຕະລາງເຮັດວຽກ",
     "wifi_not_found": "ບໍ່ພົບ WiFi",
     "user_not_found": "ບໍ່ພົບຜູ້ໃຊ້",
+    "email_not_registered": "ອີເມວນີ້ບໍ່ມີໃນລະບົບ",
     "username_taken": "ຊື່ຜູ້ໃຊ້ນີ້ຖືກໃຊ້ໄປແລ້ວ",
     "email_taken": "ອີເມວນີ້ຖືກລົງທະບຽນໄປແລ້ວ",
     "login_email_required": "ຕ້ອງມີອີເມວ ເພື່ອສ້າງບັນຊີເຂົ້າລະບົບ",

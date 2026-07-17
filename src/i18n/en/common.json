@@ -17,6 +17,7 @@
     "schedule_not_found": "Work schedule not found",
     "wifi_not_found": "WiFi network not found",
     "user_not_found": "User not found",
+    "email_not_registered": "This email is not registered in the system",
     "username_taken": "This username is already taken",
     "email_taken": "This email is already registered",
     "login_email_required": "A login email is required to create an account",
