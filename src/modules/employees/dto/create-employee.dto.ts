@@ -59,6 +59,14 @@ export class CreateEmployeeDto {
   @IsDateString()
   birthDate?: string;
 
+  @ApiPropertyOptional({
+    example: '2027-01-31',
+    description: 'Contract end date. Omit / null for open-ended employment.',
+  })
+  @IsOptional()
+  @IsDateString()
+  contractEndDate?: string;
+
   @ApiPropertyOptional({ enum: EmployeeStatus })
   @IsOptional()
   @IsEnum(EmployeeStatus)

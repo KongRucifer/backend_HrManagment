@@ -67,6 +67,10 @@ model User {
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   // Null until the row is first updated (set manually on update, never on create).
   updatedAt    DateTime? @map("updated_at") @db.Timestamptz(6)
+  // Soft delete: non-null once the account is "deleted". A deleted user is
+  // hidden from the default lists and cannot log in, but the row survives so it
+  // can be restored (or hard-deleted later).
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   @@map("users")
   @@schema("auth")
@@ -163,6 +167,9 @@ model Employee {
   positionId     String?        @map("position_id") @db.Uuid
   positionRef    Position?      @relation(fields: [positionId], references: [id], onDelete: SetNull)
   birthDate      DateTime?      @map("birth_date") @db.Date
+  // Employment contract end date. Null = open-ended / permanent (no reminder).
+  // The nightly job notifies admins 30 days before and again on the day.
+  contractEndDate DateTime?     @map("contract_end_date") @db.Date
   status         EmployeeStatus @default(active)
   workScheduleId String?        @map("work_schedule_id") @db.Uuid
   workSchedule   WorkSchedule?  @relation(fields: [workScheduleId], references: [id], onDelete: SetNull)
@@ -172,9 +179,12 @@ model Employee {
   createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   // Null until the row is first updated (set manually on update, never on create).
   updatedAt      DateTime?      @map("updated_at") @db.Timestamptz(6)
+  // Soft delete — mirrors auth.users.deletedAt; the two are set together.
+  deletedAt      DateTime?      @map("deleted_at") @db.Timestamptz(6)
   attendances       Attendance[]
   leaveRequests     LeaveRequest[]
   emergencyRequests EmergencyRequest[]
+  remoteWorkDays    RemoteWorkDay[]
 
   @@map("employees")
   @@schema("public")
@@ -198,6 +208,47 @@ model WifiNetwork {
   checkOutAttendances Attendance[] @relation("CheckOutWifi")
 
   @@map("wifi_networks")
+  @@schema("public")
+}
+
+/// An office geofence for GPS-based check-in (used by the web app, which cannot
+/// read WiFi). A check-in is accepted when the device's coordinates fall within
+/// `radiusMeters` of (latitude, longitude). WiFi (WifiNetwork) still gates the
+/// mobile app; the two verification methods coexist.
+model OfficeLocation {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  latitude     Float
+  longitude    Float
+  /// Accepted distance from the point, in metres (e.g. 100).
+  radiusMeters Int      @default(100) @map("radius_meters")
+  isActive     Boolean  @default(true) @map("is_active")
+  // Audit: auth.users.id of who created / last updated (scalar, no FK).
+  createdById  String?  @map("created_by") @db.Uuid
+  updatedById  String?  @map("updated_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  // Null until first updated (set manually on update, never on create).
+  updatedAt    DateTime? @map("updated_at") @db.Timestamptz(6)
+
+  @@map("office_locations")
+  @@schema("public")
+}
+
+/// Admin-granted "work from home" day: for the (employee, workDate) here, the
+/// GPS geofence is skipped so the employee can check in/out from anywhere. One
+/// row per employee per day; its mere existence is the permission.
+model RemoteWorkDay {
+  id          String   @id @default(uuid()) @db.Uuid
+  employeeId  String   @map("employee_id") @db.Uuid
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  workDate    DateTime @map("work_date") @db.Date
+  // auth.users.id of the admin who granted it (scalar, no cross-schema FK).
+  createdById String?  @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([employeeId, workDate])
+  @@index([workDate])
+  @@map("remote_work_days")
   @@schema("public")
 }
 

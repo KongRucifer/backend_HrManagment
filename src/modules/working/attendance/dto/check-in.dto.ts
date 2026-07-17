@@ -1,21 +1,23 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsLatitude, IsLongitude, IsOptional, IsString } from 'class-validator';
 
 /**
- * The device reports the WiFi it is currently connected to. The SERVER
- * decides whether it is valid (never trust the client's own verdict).
+ * A check-in is verified server-side by GPS: the client sends lat + lng and the
+ * server decides whether they fall inside an office geofence. (WiFi checking has
+ * been retired — both the web and mobile apps send coordinates now.) The fields
+ * are optional at the DTO layer so a granted work-from-home day can check in
+ * without a fix; the service rejects a normal check-in that carries no location.
  */
 export class CheckInDto {
-  @ApiProperty({ example: 'LTS_OFFICE', description: 'Connected WiFi SSID' })
-  @IsString()
-  ssid: string;
+  @ApiPropertyOptional({ example: 17.9757, description: 'GPS latitude' })
+  @IsOptional()
+  @IsLatitude()
+  lat?: number;
 
-  @ApiProperty({
-    example: 'a4:2b:8c:11:22:33',
-    description: 'Connected WiFi BSSID (router MAC)',
-  })
-  @IsString()
-  bssid: string;
+  @ApiPropertyOptional({ example: 102.6331, description: 'GPS longitude' })
+  @IsOptional()
+  @IsLongitude()
+  lng?: number;
 
   @ApiPropertyOptional({ example: '17.9757,102.6331', description: 'lat,lng' })
   @IsOptional()

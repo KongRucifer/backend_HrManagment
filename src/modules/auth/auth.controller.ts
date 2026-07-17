@@ -1,15 +1,23 @@
-import { Body, Controller, Get, Patch, Post, Query, Res } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, Query, Req, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import {
   AuthUser,
   CurrentUser,
 } from '../../shared/decorators/current-user.decorator';
 import { Public } from '../../shared/decorators/public.decorator';
+import {
+  authCookieName,
+  clientAppOf,
+} from '../../shared/utils/app-cookie.util';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ConfirmOtpDto } from './dto/confirm-otp.dto';
+import {
+  ForgotPasswordConfirmDto,
+  ForgotPasswordRequestDto,
+} from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -32,10 +40,12 @@ export class AuthController {
   @Post('login')
   async login(
     @Body() dto: LoginDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.login(dto);
-    this.setAuthCookie(res, result.accessToken);
+    // The app (admin/employee) gates which roles may log in and picks the cookie.
+    const result = await this.authService.login(dto, clientAppOf(req));
+    this.setAuthCookie(req, res, result.accessToken);
     // Tokens also returned for non-browser clients (mobile app / API tools).
     return {
       user: result.user,
@@ -48,10 +58,11 @@ export class AuthController {
   @Post('register')
   async register(
     @Body() dto: RegisterDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.register(dto);
-    this.setAuthCookie(res, result.accessToken);
+    const result = await this.authService.register(dto, clientAppOf(req));
+    this.setAuthCookie(req, res, result.accessToken);
     return {
       user: result.user,
       accessToken: result.accessToken,
@@ -73,10 +84,11 @@ export class AuthController {
   @Post('refresh')
   async refresh(
     @Body() dto: RefreshDto,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.refresh(dto.refreshToken);
-    this.setAuthCookie(res, result.accessToken);
+    this.setAuthCookie(req, res, result.accessToken);
     return {
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
@@ -85,10 +97,12 @@ export class AuthController {
 
   @ApiBearerAuth()
   @Post('logout')
-  logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie(this.config.get<string>('cookie.name') || 'access_token', {
-      path: '/',
-    });
+  logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const base = this.config.get<string>('cookie.name') || 'access_token';
+    // Clear the per-app cookie for the app that called (and the base name too,
+    // to sweep up any legacy shared cookie).
+    res.clearCookie(authCookieName(req, base), { path: '/' });
+    res.clearCookie(base, { path: '/' });
     return { success: true };
   }
 
@@ -142,6 +156,24 @@ export class AuthController {
     );
   }
 
+  /** Public step 1: email a reset code to whoever owns this address. */
+  @Public()
+  @Post('password/forgot/request-otp')
+  requestPasswordReset(@Body() dto: ForgotPasswordRequestDto) {
+    return this.authService.requestPasswordReset(dto.email);
+  }
+
+  /** Public step 2: verify the code and set the new password. */
+  @Public()
+  @Post('password/forgot/confirm-otp')
+  confirmPasswordReset(@Body() dto: ForgotPasswordConfirmDto) {
+    return this.authService.confirmPasswordReset(
+      dto.email,
+      dto.code,
+      dto.newPassword,
+    );
+  }
+
   /** Change your own username (the login identifier). */
   @ApiBearerAuth()
   @Patch('username')
@@ -172,8 +204,9 @@ export class AuthController {
     return this.authService.confirmEmailOtp(user.userId, dto.code);
   }
 
-  private setAuthCookie(res: Response, token: string) {
-    res.cookie(this.config.get<string>('cookie.name') || 'access_token', token, {
+  private setAuthCookie(req: Request, res: Response, token: string) {
+    const base = this.config.get<string>('cookie.name') || 'access_token';
+    res.cookie(authCookieName(req, base), token, {
       httpOnly: true,
       sameSite: 'lax',
       secure: this.config.get<boolean>('cookie.secure') ?? false,

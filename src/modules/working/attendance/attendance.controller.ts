@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
   AuthUser,
@@ -9,6 +9,7 @@ import { Role } from '@prisma/client';
 import { AttendanceService } from './attendance.service';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
+import { GrantRemoteWorkDto } from './dto/remote-work.dto';
 import { QueryAttendanceDto } from './dto/query-attendance.dto';
 import { SummaryAttendanceDto } from './dto/summary-attendance.dto';
 
@@ -64,5 +65,40 @@ export class AttendanceController {
     @Query('dateTo') dateTo: string,
   ) {
     return this.service.markAbsentRange(dateFrom, dateTo);
+  }
+
+  // ---- Work-from-home (GPS bypass) grants ----
+  /** Grants a WFH day (GPS bypass) to the selected employees (default: today). */
+  @Roles(Role.admin)
+  @Post('remote-work')
+  grantRemoteWork(
+    @Body() dto: GrantRemoteWorkDto,
+    @CurrentUser('userId') actorId: string,
+  ) {
+    return this.service.grantRemoteWork(dto, actorId);
+  }
+
+  /** All WFH grants grouped by date (every scheduled day, newest first). */
+  @Roles(Role.admin)
+  @Get('remote-work/all')
+  listAllRemoteWork() {
+    return this.service.listAllRemoteWork();
+  }
+
+  /** Lists the employees granted a WFH day on `date` (default: today). */
+  @Roles(Role.admin)
+  @Get('remote-work')
+  listRemoteWork(@Query('date') date?: string) {
+    return this.service.listRemoteWork(date);
+  }
+
+  /** Revokes one employee's WFH grant on `date` (default: today). */
+  @Roles(Role.admin)
+  @Delete('remote-work')
+  revokeRemoteWork(
+    @Query('employeeId') employeeId: string,
+    @Query('date') date?: string,
+  ) {
+    return this.service.revokeRemoteWork(employeeId, date);
   }
 }

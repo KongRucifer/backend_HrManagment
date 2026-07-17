@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { toDateOnly } from '../../shared/utils/datetime.util';
 import { EmployeesService } from '../employees/employees.service';
 import { MailService } from '../mail/mail.service';
 import { UsersService } from '../users/users.service';
+import { ClientApp } from '../../shared/utils/app-cookie.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtPayload } from './strategies/jwt.strategy';
@@ -45,6 +47,47 @@ export class AuthService {
     ]);
     await this.mail.sendPasswordOtp(user.email, code);
     return { email: user.email };
+  }
+
+  /**
+   * Public "forgot password" step 1: look the account up by email and mail it a
+   * reset OTP. Always returns success (never reveals whether an account with
+   * that email exists) — a code is only actually sent when it does.
+   */
+  async requestPasswordReset(email: string): Promise<{ success: true }> {
+    const user = await this.prisma.user.findFirst({
+      where: { email: email.trim(), deletedAt: null, isActive: true },
+    });
+    if (user) {
+      const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+      const codeHash = await bcrypt.hash(code, 10);
+      const expiresAt = new Date(Date.now() + 10 * 60_000); // 10 minutes
+      await this.prisma.$transaction([
+        this.prisma.passwordOtp.deleteMany({ where: { userId: user.id } }),
+        this.prisma.passwordOtp.create({
+          data: { userId: user.id, codeHash, expiresAt },
+        }),
+      ]);
+      await this.mail.sendPasswordOtp(user.email, code);
+    }
+    return { success: true };
+  }
+
+  /**
+   * Public "forgot password" step 2: verify the emailed code for that account
+   * and set the new password. Reuses the same OTP verification as the logged-in
+   * flow. A missing account is reported as an invalid code (no enumeration).
+   */
+  async confirmPasswordReset(
+    email: string,
+    code: string,
+    newPassword: string,
+  ): Promise<{ success: true }> {
+    const user = await this.prisma.user.findFirst({
+      where: { email: email.trim(), deletedAt: null, isActive: true },
+    });
+    if (!user) throw new BadRequestException('common.errors.otp_invalid');
+    return this.confirmPasswordOtp(user.id, code, newPassword);
   }
 
   /**
@@ -185,10 +228,14 @@ export class AuthService {
     return { success: true };
   }
 
-  async login(dto: LoginDto) {
+  async login(dto: LoginDto, app?: ClientApp) {
     const user = await this.usersService.findByUsername(dto.username);
     if (!user) {
       throw new UnauthorizedException('common.errors.invalid_credentials');
+    }
+    // Soft-deleted accounts can't log in until an admin restores them.
+    if (user.deletedAt) {
+      throw new UnauthorizedException('common.errors.account_deleted');
     }
     if (!user.isActive) {
       throw new UnauthorizedException('common.errors.account_disabled');
@@ -196,6 +243,14 @@ export class AuthService {
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
       throw new UnauthorizedException('common.errors.invalid_credentials');
+    }
+    // Per-app role gate: the admin web is admins-only; the employee web rejects
+    // admins (they must use the admin panel).
+    if (app === 'admin' && user.role !== Role.admin) {
+      throw new ForbiddenException('common.errors.admin_only');
+    }
+    if (app === 'employee' && user.role === Role.admin) {
+      throw new ForbiddenException('common.errors.employee_only');
     }
 
     await this.usersService.updateLastLogin(user.id);
@@ -208,7 +263,12 @@ export class AuthService {
   }
 
   /** Self sign-up: creates an employee record + a login account, then logs in. */
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, app?: ClientApp) {
+    // Self sign-up always creates an employee account — never allow it from the
+    // admin web (admins are provisioned, not self-registered).
+    if (app === 'admin') {
+      throw new ForbiddenException('common.errors.employee_only');
+    }
     if (await this.usersService.isEmailTaken(dto.email)) {
       throw new ConflictException('common.errors.email_taken');
     }

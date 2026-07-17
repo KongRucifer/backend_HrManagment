@@ -66,6 +66,13 @@ export class NotificationsService {
   ): Promise<PaginatedResult<Prisma.NotificationGetPayload<object>>> {
     const where: Prisma.NotificationWhereInput = { userId };
     if (query.isRead !== undefined) where.isRead = query.isRead;
+    if (query.dateFrom || query.dateTo) {
+      const createdAt: Prisma.DateTimeFilter = {};
+      if (query.dateFrom) createdAt.gte = new Date(`${query.dateFrom}T00:00:00`);
+      // Inclusive end: everything up to 23:59:59.999 of dateTo.
+      if (query.dateTo) createdAt.lte = new Date(`${query.dateTo}T23:59:59.999`);
+      where.createdAt = createdAt;
+    }
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.notification.findMany({

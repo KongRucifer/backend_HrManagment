@@ -96,11 +96,49 @@ export class UsersService {
     return !!hit && hit.id !== ignoreUserId;
   }
 
-  async findAll() {
-    const users = await this.prisma.user.findMany({
-      orderBy: { username: 'asc' },
-    });
-    return attachActors(this.prisma, users);
+  /**
+   * List accounts, filtered by soft-delete state (active by default) and an
+   * optional username/email search.
+   */
+  async findAll(
+    opts: {
+      deleted?: boolean;
+      search?: string;
+      page?: number;
+      limit?: number;
+    } = {},
+  ) {
+    const page = opts.page && opts.page > 0 ? opts.page : 1;
+    const limit = opts.limit && opts.limit > 0 ? Math.min(opts.limit, 100) : 10;
+
+    const where: Prisma.UserWhereInput = {
+      // deletedAt: null -> active; { not: null } -> the deleted bin.
+      deletedAt: opts.deleted ? { not: null } : null,
+    };
+    if (opts.search) {
+      where.OR = [
+        { username: { contains: opts.search, mode: 'insensitive' } },
+        { email: { contains: opts.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where,
+        orderBy: { username: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    return {
+      items: await attachActors(this.prisma, rows),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit) || 1,
+    };
   }
 
   async findOne(id: string): Promise<User> {
@@ -153,11 +191,50 @@ export class UsersService {
     return this.prisma.user.update({ where: { id }, data });
   }
 
+  /**
+   * Soft delete: mark the account (and its linked employee) as deleted instead
+   * of removing the row. It disappears from the active lists and can no longer
+   * log in, but can be restored or hard-deleted later.
+   */
   async remove(id: string): Promise<void> {
     const user = await this.findOne(id);
-    // Deleting an account also removes its linked employee record, plus the
-    // rows that reference the user by a cross-schema scalar (no FK cascade):
-    // its push device tokens and in-app notifications.
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id }, data: { deletedAt: now } }),
+      ...(user.employeeId
+        ? [
+            this.prisma.employee.updateMany({
+              where: { id: user.employeeId },
+              data: { deletedAt: now },
+            }),
+          ]
+        : []),
+    ]);
+  }
+
+  /** Undo a soft delete on the account and its linked employee. */
+  async restore(id: string): Promise<void> {
+    const user = await this.findOne(id);
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id }, data: { deletedAt: null } }),
+      ...(user.employeeId
+        ? [
+            this.prisma.employee.updateMany({
+              where: { id: user.employeeId },
+              data: { deletedAt: null },
+            }),
+          ]
+        : []),
+    ]);
+  }
+
+  /**
+   * Permanently remove the account and its linked employee record, plus the
+   * rows that reference the user by a cross-schema scalar (no FK cascade): its
+   * push device tokens and in-app notifications. Irreversible.
+   */
+  async hardRemove(id: string): Promise<void> {
+    const user = await this.findOne(id);
     await this.prisma.$transaction([
       this.prisma.deviceToken.deleteMany({ where: { userId: id } }),
       this.prisma.notification.deleteMany({ where: { userId: id } }),

@@ -26,9 +26,10 @@ import {
 } from '../../../shared/utils/datetime.util';
 import { PrismaService } from '../../../prisma/prisma.service';
 import { EmployeesService } from '../../employees/employees.service';
-import { WifiService } from '../wifi/wifi.service';
+import { GpsService } from '../gps/gps.service';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
+import { GrantRemoteWorkDto } from './dto/remote-work.dto';
 import { QueryAttendanceDto } from './dto/query-attendance.dto';
 import { SummaryAttendanceDto } from './dto/summary-attendance.dto';
 
@@ -48,16 +49,49 @@ export class AttendanceService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly wifiService: WifiService,
+    private readonly gpsService: GpsService,
     private readonly employeesService: EmployeesService,
   ) {}
 
-  /** The employee performs a check-in (must be on office WiFi). */
+  /**
+   * Verifies the caller is physically at the office via GPS coordinates, which
+   * both the web and mobile apps now send (WiFi checking has been retired).
+   *
+   * Exception: an admin can grant a "work from home" day for this employee, in
+   * which case the geofence is skipped entirely and the check-in is accepted
+   * from anywhere. Throws when no WFH grant applies and either the coordinates
+   * are missing or fall outside every office radius.
+   */
+  private async verifyPresence(
+    employeeId: string,
+    dto: { lat?: number; lng?: number },
+  ): Promise<void> {
+    // WFH bypass first: if today is a granted remote-work day, accept without
+    // any location check (the employee is deliberately not at the office).
+    const remote = await this.prisma.remoteWorkDay.findUnique({
+      where: {
+        employeeId_workDate: {
+          employeeId,
+          workDate: toDateOnly(getWorkDate()),
+        },
+      },
+    });
+    if (remote) return;
+
+    if (dto.lat != null && dto.lng != null) {
+      await this.gpsService.verifyOrThrow(dto.lat, dto.lng);
+      return;
+    }
+    // No GPS fix supplied and no WFH grant — nothing to verify against.
+    throw new ForbiddenException('common.errors.location_required');
+  }
+
+  /** The employee performs a check-in (must be within an office geofence). */
   async checkIn(user: AuthUser, dto: CheckInDto): Promise<Attendance> {
     const employeeId = this.requireEmployee(user);
 
-    // 1) WiFi gate — server-side verification.
-    const wifi = await this.wifiService.verifyOrThrow(dto.ssid, dto.bssid);
+    // 1) Presence gate — GPS verified server-side (or skipped for a WFH day).
+    await this.verifyPresence(employeeId, dto);
 
     // 2) One record per employee per day. A row may already exist because an
     //    approved leave/emergency was materialized onto this day — that is NOT
@@ -98,14 +132,12 @@ export class AttendanceService {
         employeeId,
         workDate,
         checkInTime: now,
-        checkInWifiId: wifi.id,
         checkInLocation: dto.location ?? null,
         status,
         note: dto.note ?? null,
       },
       update: {
         checkInTime: now,
-        checkInWifiId: wifi.id,
         checkInLocation: dto.location ?? null,
         status,
         note: dto.note ?? undefined,
@@ -113,11 +145,11 @@ export class AttendanceService {
     });
   }
 
-  /** The employee performs a check-out (must be on office WiFi). */
+  /** The employee performs a check-out (GPS, or skipped for a WFH day). */
   async checkOut(user: AuthUser, dto: CheckOutDto): Promise<Attendance> {
     const employeeId = this.requireEmployee(user);
 
-    const wifi = await this.wifiService.verifyOrThrow(dto.ssid, dto.bssid);
+    await this.verifyPresence(employeeId, dto);
 
     const workDateStr = getWorkDate();
     const workDate = toDateOnly(workDateStr);
@@ -146,7 +178,6 @@ export class AttendanceService {
       where: { id: record.id },
       data: {
         checkOutTime: now,
-        checkOutWifiId: wifi.id,
         checkOutLocation: dto.location ?? null,
         workHours: diffHours(record.checkInTime, now),
         leftEarly,
@@ -341,6 +372,95 @@ export class AttendanceService {
       skipped += res.skipped;
     }
     return { dateFrom, dateTo, marked, skipped };
+  }
+
+  // ---- Work-from-home (GPS bypass) grants ----
+  /**
+   * Grants the selected employees a WFH day (default: today) so they can check
+   * in/out from anywhere. Idempotent: createMany + skipDuplicates on the
+   * (employeeId, workDate) unique key, so re-granting is a no-op.
+   */
+  async grantRemoteWork(dto: GrantRemoteWorkDto, actorId?: string) {
+    const date = toDateOnly(dto.date ?? getWorkDate());
+    const res = await this.prisma.remoteWorkDay.createMany({
+      data: dto.employeeIds.map((employeeId) => ({
+        employeeId,
+        workDate: date,
+        createdById: actorId ?? null,
+      })),
+      skipDuplicates: true,
+    });
+    return { granted: res.count, date: date.toISOString().slice(0, 10) };
+  }
+
+  /** Lists the employees granted a WFH day on `date` (default: today). */
+  async listRemoteWork(date?: string) {
+    const workDate = toDateOnly(date ?? getWorkDate());
+    const rows = await this.prisma.remoteWorkDay.findMany({
+      where: { workDate },
+      include: {
+        employee: {
+          select: { id: true, firstName: true, lastName: true, employeeCode: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      date: workDate.toISOString().slice(0, 10),
+      items: rows.map((r) => ({
+        id: r.id,
+        employeeId: r.employeeId,
+        employee: r.employee,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * All WFH grants grouped by date (newest date first) so the admin sees every
+   * day they have scheduled, each with its list of employees.
+   */
+  async listAllRemoteWork() {
+    const rows = await this.prisma.remoteWorkDay.findMany({
+      include: {
+        employee: {
+          select: { id: true, firstName: true, lastName: true, employeeCode: true },
+        },
+      },
+      orderBy: [{ workDate: 'desc' }, { createdAt: 'desc' }],
+    });
+
+    // Group into { date, items } buckets, preserving the desc date order.
+    const byDate = new Map<
+      string,
+      { date: string; items: typeof rows }
+    >();
+    for (const r of rows) {
+      const key = r.workDate.toISOString().slice(0, 10);
+      if (!byDate.has(key)) byDate.set(key, { date: key, items: [] });
+      byDate.get(key)!.items.push(r);
+    }
+
+    return {
+      dates: [...byDate.values()].map((d) => ({
+        date: d.date,
+        items: d.items.map((r) => ({
+          id: r.id,
+          employeeId: r.employeeId,
+          employee: r.employee,
+          createdAt: r.createdAt,
+        })),
+      })),
+    };
+  }
+
+  /** Revokes a single WFH grant. No-op (idempotent) if it was not granted. */
+  async revokeRemoteWork(employeeId: string, date?: string) {
+    const workDate = toDateOnly(date ?? getWorkDate());
+    await this.prisma.remoteWorkDay.deleteMany({
+      where: { employeeId, workDate },
+    });
+    return { revoked: true };
   }
 
   // ---- helpers ----

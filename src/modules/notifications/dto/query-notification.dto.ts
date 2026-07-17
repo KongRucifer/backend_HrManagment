@@ -1,10 +1,20 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsOptional } from 'class-validator';
+import { IsBoolean, IsDateString, IsOptional } from 'class-validator';
 import { PaginationDto } from '../../../shared/dto/pagination.dto';
 
-/** Paged notification list, optionally narrowed to read / unread. */
+/** Paged notification list, optionally narrowed to read / unread and a date range. */
 export class QueryNotificationDto extends PaginationDto {
+  @ApiPropertyOptional({ example: '2026-07-01', description: 'created on/after' })
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ example: '2026-07-31', description: 'created on/before' })
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+
   @ApiPropertyOptional({
     description: 'true = read only, false = unread only, omitted = all',
   })

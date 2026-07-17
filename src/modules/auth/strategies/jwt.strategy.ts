@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthUser } from '../../../shared/decorators/current-user.decorator';
+import { authCookieName } from '../../../shared/utils/app-cookie.util';
 
 export interface JwtPayload {
   sub: string;
@@ -13,10 +14,16 @@ export interface JwtPayload {
   employeeId: string | null;
 }
 
-/** Reads the JWT from the httpOnly cookie (browser) or Bearer header (mobile/API). */
+/**
+ * Reads the JWT from the httpOnly cookie (browser) or Bearer header (mobile/API).
+ * The cookie name is per-app (`<base>_admin` / `<base>_employee`) so the admin
+ * and employee web apps keep separate sessions on the same host; the plain base
+ * name is tried as a fallback for older cookies / clients without `X-App`.
+ */
 const cookieExtractor = (req: Request): string | null => {
-  const name = process.env.COOKIE_NAME || 'access_token';
-  return req?.cookies?.[name] ?? null;
+  const base = process.env.COOKIE_NAME || 'access_token';
+  const name = authCookieName(req, base);
+  return req?.cookies?.[name] ?? req?.cookies?.[base] ?? null;
 };
 
 @Injectable()

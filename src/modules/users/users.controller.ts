@@ -30,8 +30,18 @@ export class UsersController {
   }
 
   @Get()
-  findAll() {
-    return this.usersService.findAll();
+  findAll(
+    @Query('deleted') deleted?: string,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.usersService.findAll({
+      deleted: deleted === 'true',
+      search: search?.trim() || undefined,
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
   }
 
   // Declared before ":id" so "availability" isn't parsed as a UUID param.
@@ -57,8 +67,21 @@ export class UsersController {
     return this.usersService.update(id, dto, actorId);
   }
 
+  /** Soft delete — marks the account (and its employee) deleted. */
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.remove(id);
+  }
+
+  /** Restore a soft-deleted account (and its employee). */
+  @Post(':id/restore')
+  restore(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.restore(id);
+  }
+
+  /** Permanent, irreversible delete. */
+  @Delete(':id/hard')
+  hardRemove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.usersService.hardRemove(id);
   }
 }

@@ -102,6 +102,9 @@ export class EmployeesService {
       departmentId: dto.departmentId ?? null,
       positionId: dto.positionId ?? null,
       birthDate: dto.birthDate ? toDateOnly(dto.birthDate) : null,
+      contractEndDate: dto.contractEndDate
+        ? toDateOnly(dto.contractEndDate)
+        : null,
       // Status defaults to "active" (schema default) unless explicitly set.
       status: dto.status,
       workScheduleId,
@@ -161,7 +164,11 @@ export class EmployeesService {
   async findAll(
     query: QueryEmployeeDto,
   ): Promise<PaginatedResult<EmployeeListItem>> {
-    const where: Prisma.EmployeeWhereInput = {};
+    const showDeleted = query.deleted === 'true';
+    const where: Prisma.EmployeeWhereInput = {
+      // Active list vs the soft-deleted bin.
+      deletedAt: showDeleted ? { not: null } : null,
+    };
 
     // Exclude employees whose linked account is an admin (not shown here).
     const admins = await this.prisma.user.findMany({
@@ -178,10 +185,25 @@ export class EmployeesService {
     if (query.departmentId) where.departmentId = query.departmentId;
     if (query.status) where.status = query.status;
     if (query.search) {
+      // Username lives on the linked account (a separate schema, no relation),
+      // so resolve the matching employeeIds first and fold them into the OR.
+      const matchingAccounts = await this.prisma.user.findMany({
+        where: {
+          username: { contains: query.search, mode: 'insensitive' },
+          employeeId: { not: null },
+        },
+        select: { employeeId: true },
+      });
+      const usernameEmployeeIds = matchingAccounts
+        .map((u) => u.employeeId)
+        .filter((id): id is string => !!id);
       where.OR = [
         { firstName: { contains: query.search, mode: 'insensitive' } },
         { lastName: { contains: query.search, mode: 'insensitive' } },
         { employeeCode: { contains: query.search, mode: 'insensitive' } },
+        ...(usernameEmployeeIds.length
+          ? [{ id: { in: usernameEmployeeIds } }]
+          : []),
       ];
     }
 
@@ -243,6 +265,11 @@ export class EmployeesService {
     if (dto.birthDate !== undefined) {
       data.birthDate = dto.birthDate ? toDateOnly(dto.birthDate) : null;
     }
+    if (dto.contractEndDate !== undefined) {
+      data.contractEndDate = dto.contractEndDate
+        ? toDateOnly(dto.contractEndDate)
+        : null;
+    }
     if (dto.departmentId !== undefined) {
       data.department = dto.departmentId
         ? { connect: { id: dto.departmentId } }
@@ -261,11 +288,41 @@ export class EmployeesService {
     return this.prisma.employee.update({ where: { id }, data });
   }
 
+  /**
+   * Soft delete: mark the employee (and its linked login account) as deleted
+   * instead of removing the row, so it can be restored or hard-deleted later.
+   */
   async remove(id: string): Promise<void> {
     await this.findOne(id);
-    // Deleting an employee also removes its linked login account — and that
-    // account's push device tokens / notifications, which reference the user by
-    // a cross-schema scalar (no FK cascade), so they must be cleared explicitly.
+    const now = new Date();
+    await this.prisma.$transaction([
+      this.prisma.employee.update({ where: { id }, data: { deletedAt: now } }),
+      this.prisma.user.updateMany({
+        where: { employeeId: id },
+        data: { deletedAt: now },
+      }),
+    ]);
+  }
+
+  /** Undo a soft delete on the employee and its linked account. */
+  async restore(id: string): Promise<void> {
+    await this.findOne(id);
+    await this.prisma.$transaction([
+      this.prisma.employee.update({ where: { id }, data: { deletedAt: null } }),
+      this.prisma.user.updateMany({
+        where: { employeeId: id },
+        data: { deletedAt: null },
+      }),
+    ]);
+  }
+
+  /**
+   * Permanent, irreversible delete of the employee and its linked login account
+   * — plus that account's push device tokens / notifications, which reference
+   * the user by a cross-schema scalar (no FK cascade), so must be cleared here.
+   */
+  async hardRemove(id: string): Promise<void> {
+    await this.findOne(id);
     const users = await this.prisma.user.findMany({
       where: { employeeId: id },
       select: { id: true },
@@ -285,7 +342,7 @@ export class EmployeesService {
    */
   async birthdays(withinDays = 2) {
     const employees = await this.prisma.employee.findMany({
-      where: { status: 'active', birthDate: { not: null } },
+      where: { status: 'active', birthDate: { not: null }, deletedAt: null },
       include: { department: true },
     });
 

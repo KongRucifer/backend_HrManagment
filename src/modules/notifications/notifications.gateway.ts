@@ -59,7 +59,9 @@ export class NotificationsGateway implements OnGatewayConnection {
    * it cannot read from JS — so accept the token from either place.
    */
   private extractToken(client: Socket): string | null {
-    const auth = client.handshake.auth as { token?: string } | undefined;
+    const auth = client.handshake.auth as
+      | { token?: string; app?: string }
+      | undefined;
     if (auth?.token) return auth.token;
 
     const header = client.handshake.headers.authorization;
@@ -67,12 +69,20 @@ export class NotificationsGateway implements OnGatewayConnection {
 
     const cookie = client.handshake.headers.cookie;
     if (cookie) {
-      const name = this.config.get<string>('cookie.name') || 'access_token';
-      const hit = cookie
-        .split(';')
-        .map((c) => c.trim())
-        .find((c) => c.startsWith(`${name}=`));
-      if (hit) return decodeURIComponent(hit.slice(name.length + 1));
+      const base = this.config.get<string>('cookie.name') || 'access_token';
+      // Prefer the per-app cookie the client tells us to use, then fall back to
+      // the base name (mobile / legacy) — the browser sends all of them.
+      const names =
+        auth?.app === 'admin'
+          ? [`${base}_admin`, base]
+          : auth?.app === 'employee'
+            ? [`${base}_employee`, base]
+            : [base, `${base}_employee`, `${base}_admin`];
+      const parts = cookie.split(';').map((c) => c.trim());
+      for (const name of names) {
+        const hit = parts.find((c) => c.startsWith(`${name}=`));
+        if (hit) return decodeURIComponent(hit.slice(name.length + 1));
+      }
     }
     return null;
   }

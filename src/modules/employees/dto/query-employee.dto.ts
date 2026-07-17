@@ -14,8 +14,13 @@ export class QueryEmployeeDto extends PaginationDto {
   @IsEnum(EmployeeStatus)
   status?: EmployeeStatus;
 
-  @ApiPropertyOptional({ description: 'Search by first name' })
+  @ApiPropertyOptional({ description: 'Search by name, code or account username' })
   @IsOptional()
   @IsString()
   search?: string;
+
+  @ApiPropertyOptional({ description: '"true" shows the soft-deleted bin' })
+  @IsOptional()
+  @IsString()
+  deleted?: string;
 }

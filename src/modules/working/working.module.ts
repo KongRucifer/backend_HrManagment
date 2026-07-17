@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { EmployeesModule } from '../employees/employees.module';
 import { AttendanceController } from './attendance/attendance.controller';
 import { AttendanceService } from './attendance/attendance.service';
+import { GpsController } from './gps/gps.controller';
+import { GpsService } from './gps/gps.service';
 import { ScheduleController } from './schedule/schedule.controller';
 import { ScheduleService } from './schedule/schedule.service';
 import { WifiController } from './wifi/wifi.controller';
@@ -18,8 +20,13 @@ import { WifiService } from './wifi/wifi.service';
  */
 @Module({
   imports: [EmployeesModule],
-  controllers: [AttendanceController, WifiController, ScheduleController],
-  providers: [AttendanceService, WifiService, ScheduleService],
-  exports: [AttendanceService, WifiService, ScheduleService],
+  controllers: [
+    AttendanceController,
+    WifiController,
+    GpsController,
+    ScheduleController,
+  ],
+  providers: [AttendanceService, WifiService, GpsService, ScheduleService],
+  exports: [AttendanceService, WifiService, GpsService, ScheduleService],
 })
 export class WorkingModule {}
