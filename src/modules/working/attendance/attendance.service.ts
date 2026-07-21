@@ -374,6 +374,20 @@ export class AttendanceService {
     return { dateFrom, dateTo, marked, skipped };
   }
 
+  /**
+   * Whether the logged-in employee has a work-from-home grant for today. Lets
+   * the client skip the GPS step (which is blocked on plain HTTP) and check in
+   * from anywhere on a granted day.
+   */
+  async myRemoteToday(user: AuthUser): Promise<{ date: string; remote: boolean }> {
+    const employeeId = this.requireEmployee(user);
+    const workDate = toDateOnly(getWorkDate());
+    const row = await this.prisma.remoteWorkDay.findUnique({
+      where: { employeeId_workDate: { employeeId, workDate } },
+    });
+    return { date: workDate.toISOString().slice(0, 10), remote: !!row };
+  }
+
   // ---- Work-from-home (GPS bypass) grants ----
   /**
    * Grants the selected employees a WFH day (default: today) so they can check

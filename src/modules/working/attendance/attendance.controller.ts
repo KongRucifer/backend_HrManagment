@@ -46,6 +46,15 @@ export class AttendanceController {
     return this.service.summary(user, query);
   }
 
+  /**
+   * Whether the caller has an admin-granted work-from-home day today (so the
+   * client can skip the GPS prompt and let them check in from anywhere).
+   */
+  @Get('remote-work/me')
+  myRemoteToday(@CurrentUser() user: AuthUser) {
+    return this.service.myRemoteToday(user);
+  }
+
   // ---- Admin / manager reporting ----
   @Roles(Role.admin)
   @Get()
