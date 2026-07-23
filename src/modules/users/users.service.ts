@@ -100,6 +100,25 @@ export class UsersService {
    * List accounts, filtered by soft-delete state (active by default) and an
    * optional username/email search.
    */
+  /**
+   * Head-count tiles for the Users page. `active`/`inactive` (by isActive) count
+   * only non-deleted accounts (deletedAt = null); `deleted` is the bin.
+   */
+  async summary(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    deleted: number;
+  }> {
+    const [total, active, inactive, deleted] = await this.prisma.$transaction([
+      this.prisma.user.count({ where: { deletedAt: null } }),
+      this.prisma.user.count({ where: { deletedAt: null, isActive: true } }),
+      this.prisma.user.count({ where: { deletedAt: null, isActive: false } }),
+      this.prisma.user.count({ where: { deletedAt: { not: null } } }),
+    ]);
+    return { total, active, inactive, deleted };
+  }
+
   async findAll(
     opts: {
       deleted?: boolean;

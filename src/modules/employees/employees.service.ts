@@ -161,6 +161,43 @@ export class EmployeesService {
     return employee;
   }
 
+  /**
+   * Head-count tiles for the Employees page. Matches the list population
+   * (admin-linked employees are excluded). `active`/`inactive` count only rows
+   * that are NOT soft-deleted (deletedAt = null); `deleted` is the bin.
+   */
+  async summary(): Promise<{
+    total: number;
+    active: number;
+    inactive: number;
+    deleted: number;
+  }> {
+    const admins = await this.prisma.user.findMany({
+      where: { role: 'admin', employeeId: { not: null } },
+      select: { employeeId: true },
+    });
+    const adminIds = admins
+      .map((a) => a.employeeId)
+      .filter((id): id is string => !!id);
+    const notAdmin: Prisma.EmployeeWhereInput = adminIds.length
+      ? { id: { notIn: adminIds } }
+      : {};
+
+    const [total, active, inactive, deleted] = await this.prisma.$transaction([
+      this.prisma.employee.count({ where: { ...notAdmin, deletedAt: null } }),
+      this.prisma.employee.count({
+        where: { ...notAdmin, deletedAt: null, status: 'active' },
+      }),
+      this.prisma.employee.count({
+        where: { ...notAdmin, deletedAt: null, status: 'inactive' },
+      }),
+      this.prisma.employee.count({
+        where: { ...notAdmin, deletedAt: { not: null } },
+      }),
+    ]);
+    return { total, active, inactive, deleted };
+  }
+
   async findAll(
     query: QueryEmployeeDto,
   ): Promise<PaginatedResult<EmployeeListItem>> {

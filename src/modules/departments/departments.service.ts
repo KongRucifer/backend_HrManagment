@@ -16,6 +16,15 @@ export class DepartmentsService {
     return this.prisma.department.findMany({ orderBy: { name: 'asc' } });
   }
 
+  /** Head-count tiles for the Departments & Positions page. */
+  async summary(): Promise<{ totalDepartments: number; totalPositions: number }> {
+    const [totalDepartments, totalPositions] = await this.prisma.$transaction([
+      this.prisma.department.count(),
+      this.prisma.position.count(),
+    ]);
+    return { totalDepartments, totalPositions };
+  }
+
   async findOne(id: string): Promise<Department> {
     const dept = await this.prisma.department.findUnique({ where: { id } });
     if (!dept) {

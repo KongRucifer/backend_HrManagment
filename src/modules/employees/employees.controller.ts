@@ -68,6 +68,13 @@ export class EmployeesController {
     return this.service.birthdays(withinDays ? parseInt(withinDays, 10) : 2);
   }
 
+  /** Head-count tiles (total / active / inactive / deleted). Before ":id". */
+  @Roles(Role.admin)
+  @Get('summary')
+  summary() {
+    return this.service.summary();
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOne(id);

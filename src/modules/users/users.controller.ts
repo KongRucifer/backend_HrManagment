@@ -53,6 +53,12 @@ export class UsersController {
     return this.usersService.checkAvailability(username, email);
   }
 
+  /** Head-count tiles (total / active / inactive / deleted). Before ":id". */
+  @Get('summary')
+  summary() {
+    return this.usersService.summary();
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.findOne(id);

@@ -34,6 +34,12 @@ export class DepartmentsController {
     return this.service.findAll();
   }
 
+  /** Total departments + total positions. Declared before ":id". */
+  @Get('summary')
+  summary() {
+    return this.service.summary();
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.service.findOne(id);
