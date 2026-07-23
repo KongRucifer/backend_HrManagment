@@ -322,7 +322,26 @@ export class EmployeesService {
         ? { connect: { id: dto.workScheduleId } }
         : { disconnect: true };
     }
-    return this.prisma.employee.update({ where: { id }, data });
+
+    // Keep the linked login account's active flag in sync with the employee's
+    // status: active -> the account can log in, inactive -> it is disabled. Done
+    // in one transaction so the two can never drift apart.
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.employee.update({ where: { id }, data }),
+      ...(dto.status !== undefined
+        ? [
+            this.prisma.user.updateMany({
+              where: { employeeId: id, deletedAt: null },
+              data: {
+                isActive: dto.status === 'active',
+                updatedAt: new Date(),
+                ...(actorId ? { updatedById: actorId } : {}),
+              },
+            }),
+          ]
+        : []),
+    ]);
+    return updated as Employee;
   }
 
   /**
