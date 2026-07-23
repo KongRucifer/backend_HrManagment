@@ -35,12 +35,15 @@ export class UsersController {
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('active') active?: string,
   ) {
     return this.usersService.findAll({
       deleted: deleted === 'true',
       search: search?.trim() || undefined,
       page: page ? parseInt(page, 10) : undefined,
       limit: limit ? parseInt(limit, 10) : undefined,
+      // 'true' -> active only, 'false' -> disabled only, undefined -> both.
+      isActive: active === 'true' ? true : active === 'false' ? false : undefined,
     });
   }
 

@@ -125,6 +125,7 @@ export class UsersService {
       search?: string;
       page?: number;
       limit?: number;
+      isActive?: boolean;
     } = {},
   ) {
     const page = opts.page && opts.page > 0 ? opts.page : 1;
@@ -134,6 +135,7 @@ export class UsersService {
       // deletedAt: null -> active; { not: null } -> the deleted bin.
       deletedAt: opts.deleted ? { not: null } : null,
     };
+    if (opts.isActive !== undefined) where.isActive = opts.isActive;
     if (opts.search) {
       where.OR = [
         { username: { contains: opts.search, mode: 'insensitive' } },
