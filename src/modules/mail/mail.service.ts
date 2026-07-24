@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  type OnModuleInit,
+} from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -13,10 +18,26 @@ import * as fs from 'fs';
  * real mailbox. Add the SMTP_* keys to .env to switch to real delivery.
  */
 @Injectable()
-export class MailService {
+export class MailService implements OnModuleInit {
   private readonly logger = new Logger(MailService.name);
   private transporter: nodemailer.Transporter | null = null;
   private tried = false;
+
+  /**
+   * On boot, check the SMTP connection so a bad host/user/password shows up in
+   * the logs right away instead of only when the first OTP fails to send.
+   */
+  onModuleInit(): void {
+    const t = this.init();
+    if (!t) return;
+    t.verify()
+      .then(() => this.logger.log('SMTP connection verified — ready to send'))
+      .catch((e) =>
+        this.logger.error(
+          `SMTP verify FAILED (emails will not send): ${(e as Error).message}`,
+        ),
+      );
+  }
 
   private init(): nodemailer.Transporter | null {
     if (this.tried) return this.transporter;
@@ -35,8 +56,13 @@ export class MailService {
       port,
       secure: port === 465, // 465 = implicit TLS, 587 = STARTTLS
       auth: { user, pass },
+      // Reuse one connection and fail fast instead of hanging when Gmail is slow.
+      pool: true,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
-    this.logger.log('SMTP mailer enabled');
+    this.logger.log(`SMTP mailer enabled (host=${process.env.SMTP_HOST?.trim() || 'smtp.gmail.com'}, user=${user})`);
     return this.transporter;
   }
 
@@ -80,7 +106,7 @@ export class MailService {
       'no-reply@hrapp.la';
     const logo = this.logoPath();
     try {
-      await t.sendMail({
+      const info = await t.sendMail({
         from: `"LTS HR" <${from}>`,
         to,
         subject: copy.subject,
@@ -89,12 +115,25 @@ export class MailService {
           ? [{ filename: 'logo.png', path: logo, cid: 'brandlogo' }]
           : undefined,
       });
-      this.logger.log(`OTP email sent to ${to}`);
-    } catch (e) {
-      // Never block the user on a mail failure — log the code so testing works.
-      this.logger.warn(
-        `OTP email send failed (code logged instead): ${(e as Error).message} | OTP=${code}`,
+      // sendMail can resolve while still rejecting the recipient — treat that as
+      // a failure so the caller does not report "sent" for an undelivered email.
+      if (info.rejected && info.rejected.length > 0) {
+        this.logger.error(
+          `OTP email REJECTED for ${to}: ${JSON.stringify(info.rejected)} | response=${info.response}`,
+        );
+        throw new InternalServerErrorException('common.errors.mail_send_failed');
+      }
+      this.logger.log(
+        `OTP email sent to ${to} (accepted=${JSON.stringify(info.accepted)}, response=${info.response})`,
       );
+    } catch (e) {
+      if (e instanceof InternalServerErrorException) throw e;
+      // Surface the REAL reason (auth, rate-limit, rejected recipient, ...) so a
+      // silent "sent" can never mislead the user again. Full error goes to logs.
+      this.logger.error(
+        `OTP email send FAILED to ${to}: ${(e as Error).message}`,
+      );
+      throw new InternalServerErrorException('common.errors.mail_send_failed');
     }
   }
 

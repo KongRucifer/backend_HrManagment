@@ -31,6 +31,7 @@
     "invalid_approver": "The selected approver is not allowed",
     "password_too_short": "Password must be at least 8 characters",
     "otp_not_found": "No code found — please request a new one",
+    "mail_send_failed": "Could not send the email. Please try again in a moment.",
     "otp_expired": "This code has expired — please request a new one",
     "otp_invalid": "The code is incorrect",
     "otp_too_many_attempts": "Too many wrong attempts — please request a new code",
